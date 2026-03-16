@@ -1,0 +1,12 @@
+/brainrot_identifier/
+.venv/
+__pycache__/
+*.pyc
+media_false_negative/
+media_passed/
+test_video.mp4
+brainrot-detector.zip
+.DS_Store
+*.log
+.vscode/
+.idea/
