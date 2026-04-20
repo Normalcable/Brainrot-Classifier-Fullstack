@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>BRAINROT DETECTOR</title>
+  <link
+    href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap"
+    rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+  <header>
+    <div class="logo">BRAIN<span>ROT</span> DETECTOR</div>
+    <div class="status-pill" id="statusPill">
+      <div class="status-dot"></div>
+      <span id="statusText">CHECKING...</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="hero">
+      <h1>
+        <span class="line1">IS THIS</span>
+        <span class="line2">BRAINROT?</span>
+      </h1>
+      <p>multimodal · visual + audio + text · 3-fold ensemble</p>
+    </div>
+
+    <!-- Forensic Config & Input -->
+    <div class="f-container">
+      <!-- Config Bar -->
+      <section class="f-config-block">
+        <div class="f-grid-3">
+          <!-- API URL -->
+          <div class="f-space-y">
+            <label class="f-label">API_ENDPOINT_URL</label>
+            <div class="f-input-row">
+              <input type="text" id="apiUrl" class="f-input" value="http://localhost:8000" placeholder="http://localhost:8000">
+              <button class="f-btn-ping" onclick="checkHealth()">PING</button>
+            </div>
+          </div>
+          <!-- Model Version -->
+          <div class="f-space-y">
+            <label class="f-label">MODEL_VERSION</label>
+            <div class="f-toggle-group">
+              <button id="versionDefault" class="f-toggle-btn active" onclick="setVersion('default')">DEFAULT_STABLE</button>
+              <button id="versionNoYt" class="f-toggle-btn" onclick="setVersion('no_yt')">NO_YOUTUBE_FILTER</button>
+            </div>
+          </div>
+          <!-- Analysis Mode -->
+          <div class="f-space-y">
+            <label class="f-label">ANALYSIS_MODE</label>
+            <div class="f-toggle-group">
+              <button id="modeSingle" class="f-toggle-btn active" onclick="setMode('single')">SINGLE_FOLD</button>
+              <button id="modeEnsemble" class="f-toggle-btn" onclick="setMode('ensemble')">3-FOLD_ENSEMBLE</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Input Section -->
+      <section class="f-input-section">
+        <!-- Upload Zone -->
+        <div class="f-upload-pane" id="uploadZone">
+          <input type="file" id="fileInput" accept=".mp4,.avi,.mov,.mkv,.webm,.flv" onchange="handleFile(this.files[0])">
+          <div class="f-upload-content">
+            <svg class="f-upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20M12,19L8,15H10.5V12H13.5V15H16L12,19Z" />
+            </svg>
+            <div class="f-upload-text">
+              <div class="f-upload-title">INITIALIZE_DATA_UPLOAD</div>
+              <div class="f-upload-sub">DRAG AND DROP RAW STREAM (MP4, MKV, AVI)</div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- URL Input -->
+        <div class="f-url-pane">
+          <label class="f-label">OR_REMOTE_SOURCE_URL</label>
+          <div class="f-url-group">
+            <input type="text" id="remoteUrl" class="f-input" placeholder="https://youtube.com/watch?v=...">
+            <button class="f-btn-validate" onclick="validateLink()">VALIDATE_LINK</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- File Preview (Only visible when file selected) -->
+      <div class="f-file-preview" id="filePreview">
+        <div class="file-icon">🎥</div>
+        <div class="file-meta">
+          <div class="file-name" id="fileName">—</div>
+          <div class="file-size" id="fileSize">—</div>
+        </div>
+        <button class="f-btn-remove" onclick="removeFile()">✕ REMOVE</button>
+      </div>
+
+      <!-- Action Button -->
+      <div class="f-action-wrapper">
+        <button class="f-btn-start" id="predictBtn" onclick="predict()" disabled>
+          <svg class="f-btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M16 11C17.66 11 18.96 12.3 18.96 13.91C18.96 15 18.39 16 17.41 16.5L16 14.1L14.6 16.5C13.62 16 13.06 15 13.06 13.91C13.06 12.3 14.36 11 16 11M3 3V21H21V3H3M5 5H19V19H5V5M7 7V17H9V7H7M11 13V17H13V13H11H11Z"/>
+          </svg>
+          START_ANALYSIS_SEQUENCE
+        </button>
+      </div>
+    </div>
+
+    <!-- Loading -->
+    <div class="loading-panel" id="loadingPanel">
+      <div class="spinner"></div>
+      <div class="loading-text" id="loadingText">UPLOADING VIDEO...</div>
+      <div class="progress-steps">
+        <div class="step" id="step1"><span class="step-icon">👁️</span>VISUAL</div>
+        <div class="step" id="step2"><span class="step-icon">🎧</span>AUDIO</div>
+        <div class="step" id="step3"><span class="step-icon">📝</span>TEXT</div>
+        <div class="step" id="step4"><span class="step-icon">🧠</span>FUSION</div>
+      </div>
+    </div>
+
+    <!-- Error -->
+    <div class="error-panel" id="errorPanel"></div>
+
+    <!-- Result -->
+    <div class="result-panel" id="resultPanel">
+      <div class="verdict-card" id="verdictCard">
+        <div class="verdict-header">
+          <div class="verdict-emoji" id="verdictEmoji"></div>
+          <div class="verdict-label" id="verdictLabel"></div>
+        </div>
+
+        <div class="confidence-bar-wrap">
+          <div class="confidence-meta">
+            <span>CONFIDENCE</span>
+            <span id="confPct"></span>
+          </div>
+          <div class="confidence-bar">
+            <div class="confidence-fill" id="confFill"></div>
+          </div>
+        </div>
+
+        <div class="probs-grid">
+          <div class="prob-item brainrot-prob">
+            <div class="prob-item-label">🔴 Brainrot</div>
+            <div class="prob-item-value" id="probBR">—</div>
+          </div>
+          <div class="prob-item non-brainrot-prob">
+            <div class="prob-item-label">🟢 Non-Brainrot</div>
+            <div class="prob-item-value" id="probNBR">—</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="details-grid">
+        <div class="detail-card">
+          <div class="detail-label">📁 File</div>
+          <div class="detail-value" id="detFile" style="word-break:break-all;font-size:0.72rem">—</div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-label">⚡ Process Time</div>
+          <div class="detail-value" id="detTime">—</div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-label">🔁 Folds Used</div>
+          <div class="detail-value" id="detFolds">—</div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-label">📡 Mode</div>
+          <div class="detail-value" id="detMode">—</div>
+        </div>
+        <div class="detail-card">
+          <div class="detail-label">🧠 Model Version</div>
+          <div class="detail-value" id="detVersion" style="font-size:0.72rem">—</div>
+        </div>
+      </div>
+
+      <div class="fold-bars" id="foldBars"></div>
+
+      <div class="transcript-card">
+        <div class="transcript-label">💬 TRANSCRIPT</div>
+        <div class="transcript-text" id="transcriptText">—</div>
+      </div>
+    </div>
+
+    <!-- History -->
+    <div class="history-section">
+      <div class="section-title">RECENT CLASSIFICATIONS</div>
+      <div class="history-list" id="historyList">
+        <div class="empty-history">No classifications yet — upload a video to get started.</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- Disclaimer Modal -->
+  <div id="disclaimerModal" class="modal-overlay">
+    <div class="modal-content">
+      <div class="modal-header">
+        <span class="modal-icon">⚠️</span>
+        <h2 class="modal-title">DISCLAIMER</h2>
+      </div>
+      <div class="modal-body">
+        <p>This is an <strong>experimental</strong> web application designed for research purposes.</p>
+        <p>By using this tool, you acknowledge that:</p>
+        <ul>
+          <li>I will steal all you data and your money</li>
+        </ul>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-predict" onclick="acceptDisclaimer()">I UNDERSTAND</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+
+</html>

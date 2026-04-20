@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>FORENSIC ANALYSIS MODULE | BRAINROT DETECTOR</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&amp;family=Inter:wght@400;500;600;700&amp;family=Space+Mono:wght@400;700&amp;family=Bebas+Neue&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "tertiary": "#65dcab",
+                    "surface": "#131313",
+                    "on-secondary": "#003919",
+                    "primary": "#ffb3b5",
+                    "primary-container": "#ff5167",
+                    "on-primary-fixed-variant": "#920027",
+                    "surface-dim": "#131313",
+                    "outline": "#ad8888",
+                    "on-surface-variant": "#e6bcbd",
+                    "tertiary-fixed-dim": "#65dcab",
+                    "secondary": "#f5fff3",
+                    "surface-container-low": "#1c1b1b",
+                    "on-tertiary-container": "#003121",
+                    "inverse-surface": "#e5e2e1",
+                    "background": "#131313",
+                    "surface-bright": "#3a3939",
+                    "on-primary": "#680019",
+                    "secondary-fixed-dim": "#00e479",
+                    "on-primary-fixed": "#40000c",
+                    "surface-container-highest": "#353534",
+                    "secondary-fixed": "#60ff99",
+                    "on-secondary-container": "#007239",
+                    "tertiary-fixed": "#82f9c6",
+                    "on-secondary-fixed": "#00210c",
+                    "inverse-primary": "#be0036",
+                    "error-container": "#93000a",
+                    "surface-variant": "#353534",
+                    "on-surface": "#e5e2e1",
+                    "outline-variant": "#5d3f40",
+                    "inverse-on-surface": "#313030",
+                    "tertiary-container": "#1fa478",
+                    "on-background": "#e5e2e1",
+                    "on-tertiary": "#003826",
+                    "error": "#ffb4ab",
+                    "on-tertiary-fixed": "#002115",
+                    "primary-fixed-dim": "#ffb3b5",
+                    "surface-tint": "#ffb3b5",
+                    "surface-container-high": "#2a2a2a",
+                    "on-error-container": "#ffdad6",
+                    "surface-container-lowest": "#0e0e0e",
+                    "on-secondary-fixed-variant": "#005228",
+                    "surface-container": "#201f1f",
+                    "on-tertiary-fixed-variant": "#005139",
+                    "primary-fixed": "#ffdada",
+                    "secondary-container": "#34ff8d",
+                    "on-primary-container": "#5b0015",
+                    "on-error": "#690005"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0px",
+                    "lg": "0px",
+                    "xl": "0px",
+                    "full": "9999px"
+            },
+            "fontFamily": {
+                    "headline": ["Space Grotesk"],
+                    "body": ["Inter"],
+                    "label": ["Inter"],
+                    "mono": ["Space Mono"],
+                    "display": ["Bebas Neue"]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .scanline {
+            width: 100%;
+            height: 100px;
+            z-index: 10;
+            background: linear-gradient(0deg, rgba(0, 0, 0, 0) 0%, rgba(255, 255, 255, 0.05) 50%, rgba(0, 0, 0, 0) 100%);
+            opacity: 0.1;
+            position: absolute;
+            pointer-events: none;
+            top: -100px;
+            animation: scanning 8s linear infinite;
+        }
+        @keyframes scanning {
+            0% { top: -100px; }
+            100% { top: 100%; }
+        }
+        body::before {
+            content: " ";
+            display: block;
+            position: fixed;
+            top: 0;
+            left: 0;
+            bottom: 0;
+            right: 0;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            z-index: 9999;
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body class="bg-surface-dim text-on-surface font-body overflow-x-hidden selection:bg-primary-container selection:text-white">
+<main class="min-h-screen py-12 px-6 lg:px-12">
+<div class="max-w-5xl mx-auto space-y-8">
+<!-- Analysis Flow Header -->
+<header class="text-center space-y-4">
+<h1 class="font-display text-6xl md:text-7xl tracking-tighter text-on-surface uppercase leading-none">
+                FORENSIC <span class="text-rose-500">ANALYSIS</span> MODULE
+            </h1>
+<div class="flex justify-center">
+<div class="bg-surface-container-lowest px-4 py-1.5 border border-outline-variant/30 flex items-center gap-3">
+<span class="w-2 h-2 bg-secondary rounded-full animate-pulse"></span>
+<span class="font-mono text-[10px] text-neutral-500 uppercase tracking-widest">API_STATUS:</span>
+<span class="font-mono text-[10px] text-secondary font-bold">ENCRYPTED_CONNECTED</span>
+</div>
+</div>
+</header>
+<!-- Core Configuration Block -->
+<section class="bg-surface-container-low border border-outline-variant/20 p-6">
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- API URL Input -->
+<div class="space-y-2">
+<label class="font-mono text-[10px] text-neutral-500 uppercase tracking-widest block">API_ENDPOINT_URL</label>
+<input class="w-full bg-surface-container-lowest border border-outline-variant/40 px-4 py-2 font-mono text-xs text-secondary focus:border-rose-500 focus:ring-0 outline-none transition-colors" type="text" value="https://api.forensic-intel.io/v4/stream"/>
+</div>
+<!-- Model Version selection -->
+<div class="space-y-2">
+<label class="font-mono text-[10px] text-neutral-500 uppercase tracking-widest block">MODEL_VERSION</label>
+<div class="grid grid-cols-2 bg-surface-container-lowest border border-outline-variant/40 p-1">
+<button class="py-1.5 bg-rose-500/10 text-rose-500 font-mono text-[10px] border border-rose-500/40">DEFAULT_STABLE</button>
+<button class="py-1.5 text-neutral-500 font-mono text-[10px] hover:bg-neutral-800 transition-colors">NO_YOUTUBE_FILTER</button>
+</div>
+</div>
+<!-- Analysis Mode -->
+<div class="space-y-2">
+<label class="font-mono text-[10px] text-neutral-500 uppercase tracking-widest block">ANALYSIS_MODE</label>
+<div class="grid grid-cols-2 bg-surface-container-lowest border border-outline-variant/40 p-1">
+<button class="py-1.5 text-neutral-500 font-mono text-[10px] hover:bg-neutral-800 transition-colors">SINGLE_FOLD</button>
+<button class="py-1.5 bg-rose-500/10 text-rose-500 font-mono text-[10px] border border-rose-500/40">3-FOLD_ENSEMBLE</button>
+</div>
+</div>
+</div>
+</section>
+<!-- Input Section -->
+<section class="grid grid-cols-1 md:grid-cols-12 gap-px bg-outline-variant/20 border border-outline-variant/20">
+<!-- Upload Zone -->
+<div class="md:col-span-8 bg-surface-container-low p-1 group cursor-pointer hover:bg-surface-container-high transition-colors">
+<div class="border border-dashed border-outline-variant/50 p-12 flex flex-col items-center justify-center gap-4 text-center h-full min-h-[240px]">
+<span class="material-symbols-outlined text-5xl text-rose-500/40 group-hover:text-rose-500 transition-all duration-300 scale-100 group-hover:scale-110">upload_file</span>
+<div class="space-y-1">
+<p class="font-mono text-sm uppercase tracking-tighter">INITIALIZE_DATA_UPLOAD</p>
+<p class="text-[10px] text-neutral-500 font-mono uppercase">DRAG AND DROP RAW STREAM (MP4, MKV, AVI)</p>
+</div>
+</div>
+</div>
+<!-- URL Input Field -->
+<div class="md:col-span-4 bg-surface-container-low p-8 flex flex-col justify-center gap-4 border-t md:border-t-0 md:border-l border-outline-variant/20">
+<p class="font-mono text-[10px] text-neutral-500 uppercase">OR_REMOTE_SOURCE_URL</p>
+<div class="space-y-4">
+<input class="w-full bg-surface-container-lowest border border-outline-variant/40 px-4 py-3 font-mono text-xs text-on-surface focus:border-rose-500 focus:ring-0 outline-none" placeholder="https://youtube.com/watch?v=..." type="text"/>
+<button class="w-full bg-surface-container-highest hover:bg-surface-bright py-3 font-mono text-[11px] uppercase transition-colors tracking-widest">VALIDATE_LINK</button>
+</div>
+</div>
+</section>
+<!-- Action Button -->
+<div class="pt-2">
+<button class="w-full bg-rose-500 hover:bg-rose-600 text-on-primary py-5 font-bold tracking-[0.4em] text-lg active:scale-[0.99] transition-all shadow-lg shadow-rose-500/20 group flex items-center justify-center gap-4">
+<span class="material-symbols-outlined font-normal">analytics</span>
+                START_ANALYSIS_SEQUENCE
+            </button>
+</div>
+<!-- Results Display -->
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8 pt-8 border-t border-outline-variant/10">
+<!-- Left: Verdict & Confidence -->
+<div class="lg:col-span-5 space-y-8">
+<div class="bg-surface-container-low border border-outline-variant/20 p-8 flex flex-col items-center justify-center gap-8 relative overflow-hidden">
+<div class="absolute top-0 left-0 w-full h-1 bg-rose-500"></div>
+<div class="text-center space-y-4">
+<span class="font-mono text-[10px] text-rose-500 bg-rose-500/10 px-4 py-1.5 border border-rose-500/20 uppercase tracking-widest">SCAN_VERDICT</span>
+<h2 class="font-display text-8xl text-rose-500 leading-none">BRAINROT</h2>
+<p class="font-mono text-[10px] tracking-[0.3em] text-rose-300">HIGH_ENTROPY_DETECTED</p>
+</div>
+<div class="relative w-44 h-44 flex items-center justify-center">
+<svg class="w-full h-full -rotate-90">
+<circle class="text-surface-container-highest" cx="88" cy="88" fill="transparent" r="80" stroke="currentColor" stroke-width="4"></circle>
+<circle class="text-rose-500" cx="88" cy="88" fill="transparent" r="80" stroke="currentColor" stroke-dasharray="502.65" stroke-dashoffset="35.18" stroke-width="12"></circle>
+</svg>
+<div class="absolute flex flex-col items-center">
+<span class="font-display text-5xl">93%</span>
+<span class="font-mono text-[10px] text-neutral-500 uppercase">CONFIDENCE</span>
+</div>
+</div>
+</div>
+<!-- Technical details grid -->
+<section class="bg-surface-container-low border border-outline-variant/20">
+<div class="bg-surface-container-high px-4 py-2 border-b border-outline-variant/20 flex justify-between">
+<span class="font-mono text-[10px] font-bold text-neutral-400 uppercase tracking-widest">SYSTEM_BREAKDOWN</span>
+<span class="material-symbols-outlined text-sm text-neutral-500">memory</span>
+</div>
+<div class="p-6 grid grid-cols-2 gap-y-6 gap-x-4">
+<div>
+<p class="font-mono text-[9px] text-neutral-500 mb-1 uppercase">PROC_TIME</p>
+<p class="font-mono text-lg text-secondary">42.8ms</p>
+</div>
+<div>
+<p class="font-mono text-[9px] text-neutral-500 mb-1 uppercase">FOLDS_USED</p>
+<p class="font-mono text-lg text-secondary">10/10</p>
+</div>
+<div>
+<p class="font-mono text-[9px] text-neutral-500 mb-1 uppercase">ANALYSIS_MODE</p>
+<p class="font-mono text-lg text-secondary">ENSEMBLE</p>
+</div>
+<div>
+<p class="font-mono text-[9px] text-neutral-500 mb-1 uppercase">MODEL_VER</p>
+<p class="font-mono text-lg text-secondary">BETA-09</p>
+</div>
+</div>
+</section>
+</div>
+<!-- Right: Probabilities & Transcript -->
+<div class="lg:col-span-7 space-y-8">
+<!-- Per-fold probability visualization -->
+<section class="bg-surface-container-low border border-outline-variant/20">
+<div class="bg-surface-container-high px-4 py-2 border-b border-outline-variant/20 flex justify-between items-center">
+<span class="font-mono text-[10px] font-bold text-neutral-400 uppercase tracking-widest">PER_FOLD_PROBABILITIES</span>
+<div class="flex gap-1">
+<span class="w-1.5 h-1.5 bg-rose-500"></span>
+<span class="w-1.5 h-1.5 bg-rose-500/40"></span>
+<span class="w-1.5 h-1.5 bg-rose-500/20"></span>
+</div>
+</div>
+<div class="p-6 flex items-end justify-between h-48 gap-1.5">
+<div class="w-full bg-rose-500 h-[98%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-500 h-[92%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-500 h-[95%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-500 h-[88%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-500 h-[99%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-400 h-[75%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-500 h-[94%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-500 h-[96%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-300 h-[65%] transition-all duration-1000"></div>
+<div class="w-full bg-rose-500 h-[91%] transition-all duration-1000"></div>
+</div>
+<div class="px-6 pb-4 flex justify-between font-mono text-[8px] text-neutral-600">
+<span>FOLD_01</span>
+<span>FOLD_05</span>
+<span>FOLD_10</span>
+</div>
+</section>
+<!-- Live transcript stream -->
+<section class="bg-surface-container-low border border-outline-variant/20">
+<div class="bg-surface-container-high px-4 py-2 border-b border-outline-variant/20 flex justify-between items-center">
+<span class="font-mono text-[10px] font-bold text-neutral-400 uppercase tracking-widest">LIVE_TRANSCRIPT_STREAM</span>
+<span class="text-[9px] font-mono text-secondary px-2 border border-secondary/30 animate-pulse">SCANNING...</span>
+</div>
+<div class="p-6 h-[220px] overflow-y-auto font-mono text-xs leading-relaxed text-neutral-400 scrollbar-thin scrollbar-thumb-rose-500/20 space-y-3">
+<p><span class="text-neutral-600">[00:01.23]</span> [SYSTEM] INITIALIZING STREAM HANDLER...</p>
+<p><span class="text-neutral-600">[00:02.45]</span> [AUDIO] DETECTED FREQUENCY: "skibidi"... <span class="text-rose-500">[HIGH_THREAT]</span></p>
+<p><span class="text-neutral-600">[00:04.12]</span> [VISUAL] FRAME 242: OVER-SATURATED REACTION FACE DETECTED</p>
+<p><span class="text-neutral-600">[00:05.88]</span> [ML] PATTERN MATCH: "Gen Alpha Slang Lexicon" - CONFIDENCE 0.94</p>
+<p><span class="text-neutral-600">[00:07.12]</span> [AUDIO] DETECTED FREQUENCY: "gyatt"... <span class="text-rose-500">[HIGH_THREAT]</span></p>
+<p><span class="text-neutral-600">[00:08.45]</span> [VISUAL] FRAME 512: REPETITIVE SUBWAY SURFERS FOOTAGE DETECTED</p>
+<p class="text-rose-400 font-bold"><span class="text-neutral-600">[00:09.99]</span> [CRITICAL] CUMULATIVE ENTROPY EXCEEDS THRESHOLD. TERMINATING ANALYSIS.</p>
+<div class="h-2 w-1 bg-rose-500 animate-pulse"></div>
+</div>
+</section>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="w-full py-8 px-8 flex flex-col md:flex-row justify-between items-center bg-neutral-950/50 font-space-mono text-[10px] tracking-widest border-t border-outline-variant/10">
+<div class="flex gap-8 mb-4 md:mb-0">
+<a class="text-neutral-600 hover:text-rose-500 transition-colors uppercase" href="#">PRIVACY_PROTOCOL</a>
+<a class="text-neutral-600 hover:text-rose-500 transition-colors uppercase" href="#">ENCRYPTION_STANDARDS</a>
+<a class="text-neutral-600 hover:text-rose-500 transition-colors uppercase" href="#">SUPPORT</a>
+</div>
+<p class="text-neutral-600 uppercase">© 2024 FORENSIC_TECH_INTEL. SECURE_UTILITY_V.4.2</p>
+</footer>
+<!-- Scanline Effect Element -->
+<div class="scanline"></div>
+</body></html>

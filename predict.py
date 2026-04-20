@@ -13,7 +13,6 @@ Requirements:
 """
 
 import os
-os.environ["TF_USE_LEGACY_KERAS"] = "1"   # Force tf-keras (Keras 2) for Transformers compatibility
 import gc
 import sys
 import argparse
@@ -23,10 +22,27 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import torch
 import torch.nn as nn
+import torchvision.models as models
+import torchvision.transforms as transforms
 
 # ── CONFIG — update paths to match your setup ────────────────────────────────
 CHECKPOINT_DIR  = "./checkpoints"          # folder containing BEST_fold*.pt files
 N_FOLDS         = 3                        # number of folds you trained
+
+# ── MODEL VERSIONS ────────────────────────────────────────────────────────────
+MODEL_VERSIONS = {
+    "default": {
+        "name": "Default (Full Dataset)",
+        "checkpoint_dir": "./checkpoints",
+        "n_folds": 3,
+    },
+    "no_yt": {
+        "name": "No YouTube",
+        "checkpoint_dir": "./checkpoint2",
+        "n_folds": 3,
+    },
+}
+DEFAULT_VERSION = "default"
 VISUAL_FEAT_DIM = 1280
 AUDIO_FEAT_DIM  = 2048
 TEXT_FEAT_DIM   = 768
@@ -37,6 +53,16 @@ N_MELS          = 128
 AUDIO_MAX_FRAMES= 300
 IMG_SIZE        = 224
 MAX_FRAMES      = 16                       # frames to sample from video
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Image transforms matching EfficientNet V1 ImageNet training
+img_transform = transforms.Compose([
+    transforms.ToPILImage(),
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+])
 
 
 # =============================================================================
@@ -99,56 +125,55 @@ class BrainrotModel(nn.Module):
 
 def extract_visual_features(video_path: str) -> np.ndarray:
     """Extract EfficientNet-B0 visual features from video frames."""
-    try:
-        import cv2
-        import tensorflow as tf
-        from tensorflow.keras.applications import EfficientNetB0
-        from tensorflow.keras import mixed_precision
-        mixed_precision.set_global_policy('float32')
-    except ImportError:
-        print("  [!] Missing: pip install opencv-python tensorflow")
-        sys.exit(1)
-
-    print("  [Visual] Extracting frames...")
+    import cv2
+    
+    print("  [Visual] Extracting frames & features...")
     cap    = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+         print("  [!] Could not open video.")
+         return np.zeros((1, VISUAL_FEAT_DIM), dtype=np.float32)
+
     total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frames = []
 
     # Sample evenly spaced frames
-    indices = np.linspace(0, total - 1, MAX_FRAMES, dtype=int)
+    indices = np.linspace(0, max(total - 1, 0), MAX_FRAMES, dtype=int)
     for idx in indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if ret:
-            frame = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(frame.astype(np.float32))
+            pixel_values = img_transform(frame)
+            frames.append(pixel_values)
     cap.release()
 
     if not frames:
         print("  [!] Could not read frames from video.")
-        sys.exit(1)
+        return np.zeros((1, VISUAL_FEAT_DIM), dtype=np.float32)
 
-    frames = np.array(frames)                    # (N, 224, 224, 3)
-    mean_frame = np.mean(frames, axis=0)[None]   # (1, 224, 224, 3)
+    # Use torchvision EfficientNet (weights will auto-download on first run)
+    model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT).to(DEVICE)
+    model.classifier = nn.Identity()
+    model.eval()
 
-    model = EfficientNetB0(include_top=False, weights='imagenet', pooling='avg')
-    model.trainable = False
-    feats = model.predict(mean_frame, verbose=0)  # (1, 1280)
-
+    batch = torch.stack(frames).to(DEVICE)
+    with torch.no_grad():
+        feats = model(batch)
+        mean_feat = feats.mean(dim=0, keepdim=True)
+    
+    res = mean_feat.cpu().numpy()
+    
     del model
-    tf.keras.backend.clear_session()
     gc.collect()
 
-    print(f"  [Visual] Done. Shape: {feats.shape}")
-    return feats.astype(np.float32)
+    print(f"  [Visual] Done. Shape: {res.shape}")
+    return res.astype(np.float32)
 
 
 def extract_audio_features(video_path: str) -> np.ndarray:
     """Extract mel spectrogram features from video audio track."""
     try:
         import librosa
-        import subprocess
     except ImportError:
         print("  [!] Missing: pip install librosa")
         sys.exit(1)
@@ -162,47 +187,41 @@ def extract_audio_features(video_path: str) -> np.ndarray:
         print("  [Audio] ffmpeg failed or no audio track. Using zeros.")
         return np.zeros((1, AUDIO_FEAT_DIM), dtype=np.float32)
 
-    y, sr = librosa.load(audio_path, sr=22050, mono=True)
-    os.remove(audio_path)
+    try:
+        y, sr = librosa.load(audio_path, sr=22050, mono=True)
+        if os.path.exists(audio_path): os.remove(audio_path)
 
-    mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=N_MELS)
-    mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
+        mel = librosa.feature.melspectrogram(y=y, sr=sr, n_mels=N_MELS)
+        mel_db = librosa.power_to_db(mel, ref=np.max).astype(np.float32)
+        mel_t = mel_db.T  # (time, 128)
 
-    # Transpose to (time, mels) then flatten
-    mel_t = mel_db.T  # (time, 128)
+        if mel_t.shape[0] >= AUDIO_MAX_FRAMES:
+            mel_t = mel_t[:AUDIO_MAX_FRAMES, :]
+        else:
+            pad = np.zeros((AUDIO_MAX_FRAMES - mel_t.shape[0], N_MELS), dtype=np.float32)
+            mel_t = np.vstack([mel_t, pad])
 
-    # Pad or truncate time axis
-    if mel_t.shape[0] >= AUDIO_MAX_FRAMES:
-        mel_t = mel_t[:AUDIO_MAX_FRAMES, :]
-    else:
-        pad = np.zeros((AUDIO_MAX_FRAMES - mel_t.shape[0], N_MELS), dtype=np.float32)
-        mel_t = np.vstack([mel_t, pad])
+        flat = mel_t.flatten()[None]  # (1, 38400)
+        
+        if flat.shape[1] >= AUDIO_FEAT_DIM:
+            feat = flat[:, :AUDIO_FEAT_DIM]
+        else:
+            feat = np.zeros((1, AUDIO_FEAT_DIM), dtype=np.float32)
+            feat[:, :flat.shape[1]] = flat
 
-    flat = mel_t.flatten()[None]  # (1, 300*128 = 38400)
-
-    # Truncate or pad to AUDIO_FEAT_DIM
-    if flat.shape[1] >= AUDIO_FEAT_DIM:
-        feat = flat[:, :AUDIO_FEAT_DIM]
-    else:
-        feat = np.zeros((1, AUDIO_FEAT_DIM), dtype=np.float32)
-        feat[:, :flat.shape[1]] = flat
-
-    print(f"  [Audio] Done. Shape: {feat.shape}")
-    return feat.astype(np.float32)
+        print(f"  [Audio] Done. Shape: {feat.shape}")
+        return feat.astype(np.float32)
+    except Exception as e:
+        print(f"  [!] Audio extraction failed: {e}")
+        if os.path.exists(audio_path): os.remove(audio_path)
+        return np.zeros((1, AUDIO_FEAT_DIM), dtype=np.float32)
 
 
 def extract_text_features(video_path: str) -> np.ndarray:
     """Extract DistilBERT CLS token features from video audio transcript."""
-    try:
-        import tensorflow as tf
-        from transformers import TFDistilBertModel, DistilBertTokenizer
-    except ImportError:
-        print("  [!] Missing: pip install transformers==4.40.0 tensorflow")
-        sys.exit(1)
+    from transformers import DistilBertModel, DistilBertTokenizer
 
     print("  [Text] Transcribing audio...")
-
-    # Try whisper for transcription if available, else use empty string
     transcript = ""
     try:
         import whisper
@@ -214,34 +233,32 @@ def extract_text_features(video_path: str) -> np.ndarray:
             transcript    = result.get("text", "").strip()
             os.remove(audio_path)
             del whisper_model
-            gc.collect()
-            print(f"  [Text] Transcript: \"{transcript[:80]}{'...' if len(transcript) > 80 else ''}\"")
-    except ImportError:
-        print("  [Text] whisper not installed — using empty transcript.")
-        print("         Install with: pip install openai-whisper")
+    except Exception:
+        pass
 
     if not transcript:
         transcript = "no speech detected"
 
+    print(f"  [Text] Transcript: \"{transcript[:50]}...\"")
+    
     tokenizer  = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-    bert_model = TFDistilBertModel.from_pretrained('distilbert-base-uncased')
-    bert_model.trainable = False
+    bert_model = DistilBertModel.from_pretrained('distilbert-base-uncased').to(DEVICE)
+    bert_model.eval()
 
     encoded = tokenizer(
         [transcript],
         padding='max_length',
         truncation=True,
         max_length=MAX_TEXT_LEN,
-        return_tensors='np'
-    )
-    output = bert_model(
-        input_ids=encoded['input_ids'].astype(np.int32),
-        attention_mask=encoded['attention_mask'].astype(np.int32)
-    )
-    feat = output.last_hidden_state[:, 0, :].numpy()  # (1, 768)
+        return_tensors='pt'
+    ).to(DEVICE)
 
+    with torch.no_grad():
+        output = bert_model(**encoded)
+    
+    feat = output.last_hidden_state[:, 0, :].cpu().numpy()
+    
     del bert_model, tokenizer
-    tf.keras.backend.clear_session()
     gc.collect()
 
     print(f"  [Text] Done. Shape: {feat.shape}")
@@ -266,6 +283,7 @@ def predict_single(video_path: str, checkpoint_path: str, device: torch.device) 
     print(f"\n{'─'*50}")
     print(f"📹 Video   : {os.path.basename(video_path)}")
     print(f"🧠 Model   : {os.path.basename(checkpoint_path)}")
+    print(f"📦 Version : {getattr(predict_single, '_version_name', 'N/A')}")
     print(f"{'─'*50}")
 
     # Extract features
@@ -371,7 +389,12 @@ def print_result(result: dict):
 # =============================================================================
 
 def main():
-    global CHECKPOINT_DIR
+    global CHECKPOINT_DIR, N_FOLDS
+
+    # Build help text showing available versions
+    version_help = "Model version to use. Available: " + ", ".join(
+        f"'{k}' ({v['name']})" for k, v in MODEL_VERSIONS.items()
+    ) + f" (default: {DEFAULT_VERSION})"
 
     parser = argparse.ArgumentParser(
         description="Brainrot Detector — classify a video as brainrot or not"
@@ -389,8 +412,13 @@ def main():
         help="Use all fold checkpoints and average predictions (ensemble)"
     )
     parser.add_argument(
-        "--checkpoint_dir", default=CHECKPOINT_DIR,
-        help=f"Directory containing BEST_fold*.pt files (default: {CHECKPOINT_DIR})"
+        "--checkpoint_dir", default=None,
+        help="Directory containing BEST_fold*.pt files (overrides --model_version)"
+    )
+    parser.add_argument(
+        "--model_version", default=DEFAULT_VERSION,
+        choices=list(MODEL_VERSIONS.keys()),
+        help=version_help,
     )
     args = parser.parse_args()
 
@@ -399,11 +427,23 @@ def main():
         print(f"[!] Video file not found: {args.video}")
         sys.exit(1)
 
-    # Update checkpoint dir if provided
-    CHECKPOINT_DIR = args.checkpoint_dir
+    # Resolve checkpoint dir from model version (or explicit override)
+    if args.checkpoint_dir:
+        CHECKPOINT_DIR = args.checkpoint_dir
+        version_name   = "Custom"
+    else:
+        version_cfg    = MODEL_VERSIONS[args.model_version]
+        CHECKPOINT_DIR = version_cfg["checkpoint_dir"]
+        N_FOLDS        = version_cfg["n_folds"]
+        version_name   = version_cfg["name"]
+
+    # Store version name for display in predict_single
+    predict_single._version_name = f"{args.model_version} ({version_name})"
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"\n🔧 Device: {device}")
+    print(f"\n🔧 Device  : {device}")
+    print(f"📦 Version : {args.model_version} ({version_name})")
+    print(f"📂 Checkpts: {CHECKPOINT_DIR}")
 
     # Run inference
     if args.all_folds:

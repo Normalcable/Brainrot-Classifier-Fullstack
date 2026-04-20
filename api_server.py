@@ -31,6 +31,8 @@ warnings.filterwarnings("ignore")
 import numpy as np
 import torch
 import torch.nn as nn
+import torchvision.models as models
+import torchvision.transforms as transforms
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,8 +40,6 @@ from pydantic import BaseModel
 from typing import Optional, List
 
 # ── CONFIG — update to match your setup ─────────────────────────────────────
-CHECKPOINT_DIR  = "./checkpoints"
-N_FOLDS         = 3
 VISUAL_FEAT_DIM = 1280
 AUDIO_FEAT_DIM  = 2048
 TEXT_FEAT_DIM   = 768
@@ -52,6 +52,21 @@ IMG_SIZE        = 224
 MAX_FRAMES      = 16
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# ── MODEL VERSIONS ──────────────────────────────────────────────────────────
+MODEL_VERSIONS = {
+    "default": {
+        "name": "Default (Full Dataset)",
+        "checkpoint_dir": "./checkpoints",
+        "n_folds": 3,
+    },
+    "no_yt": {
+        "name": "No YouTube",
+        "checkpoint_dir": "./checkpoint2",
+        "n_folds": 3,
+    },
+}
+DEFAULT_VERSION = "default"
 
 # =============================================================================
 # MODEL ARCHITECTURE (must match training)
@@ -113,21 +128,51 @@ class BrainrotModel(nn.Module):
 
 class ModelManager:
     def __init__(self):
-        self.models     = {}
-        self.eff_model  = None
-        self.bert_model = None
-        self.tokenizer  = None
-        self._loaded    = False
+        self.models          = {}
+        self.eff_model       = None
+        self.bert_model      = None
+        self.tokenizer       = None
+        self._loaded         = False
+        self.current_version = None
 
-    def load_all(self):
-        if self._loaded:
-            return
+        # Image transforms matching EfficientNet V1 ImageNet training
+        self.img_transform = transforms.Compose([
+            transforms.ToPILImage(),
+            transforms.Resize((IMG_SIZE, IMG_SIZE)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ])
 
-        print(f"\n[ModelManager] Loading models on {DEVICE}...")
+    def _load_feature_extractors(self):
+        """Load shared feature extractors (only once, reused across versions)."""
+        from transformers import DistilBertModel, DistilBertTokenizer
 
-        # Load PyTorch fold models
-        for fold_num in range(1, N_FOLDS + 1):
-            ckpt_path = os.path.join(CHECKPOINT_DIR, f"BEST_fold{fold_num}.pt")
+        print("  [✓] Loading EfficientNet-B0 (PyTorch)...")
+        self.eff_model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT).to(DEVICE)
+        self.eff_model.classifier = nn.Identity()  # Remove top layer to get features
+        self.eff_model.eval()
+
+        print("  [✓] Loading DistilBERT (PyTorch)...")
+        self.tokenizer  = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
+        self.bert_model = DistilBertModel.from_pretrained('distilbert-base-uncased').to(DEVICE)
+        self.bert_model.eval()
+
+    def _load_fold_models(self, version_id: str):
+        """Load fold checkpoint models for a specific version."""
+        version_cfg    = MODEL_VERSIONS[version_id]
+        checkpoint_dir = version_cfg["checkpoint_dir"]
+        n_folds        = version_cfg["n_folds"]
+
+        # Unload existing fold models
+        self.models.clear()
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+        print(f"\n[ModelManager] Loading version '{version_id}' ({version_cfg['name']}) from {checkpoint_dir}...")
+
+        for fold_num in range(1, n_folds + 1):
+            ckpt_path = os.path.join(checkpoint_dir, f"BEST_fold{fold_num}.pt")
             if os.path.exists(ckpt_path):
                 model = BrainrotModel().to(DEVICE)
                 ckpt  = torch.load(ckpt_path, map_location=DEVICE)
@@ -139,33 +184,48 @@ class ModelManager:
                 print(f"  [!] Not found: {ckpt_path}")
 
         if not self.models:
-            raise RuntimeError(f"No checkpoints found in: {CHECKPOINT_DIR}")
+            raise RuntimeError(f"No checkpoints found in: {checkpoint_dir}")
 
-        # Load TF feature extractors
-        import tensorflow as tf
-        from tensorflow.keras.applications import EfficientNetB0
-        from tensorflow.keras import mixed_precision
-        from transformers import TFDistilBertModel, DistilBertTokenizer
+        self.current_version = version_id
+        print(f"[ModelManager] Version '{version_id}' ready. Folds available: {list(self.models.keys())}")
 
-        mixed_precision.set_global_policy('float32')
+    def load_all(self, version_id: str = None):
+        """Initial load: feature extractors + default version fold models."""
+        if version_id is None:
+            version_id = DEFAULT_VERSION
 
-        print("  [✓] Loading EfficientNet-B0...")
-        self.eff_model = EfficientNetB0(
-            include_top=False, weights='imagenet', pooling='avg'
-        )
-        self.eff_model.trainable = False
+        if not self._loaded:
+            print(f"\n[ModelManager] Loading models on {DEVICE}...")
+            self._load_feature_extractors()
+            self._loaded = True
 
-        print("  [✓] Loading DistilBERT...")
-        self.tokenizer  = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
-        self.bert_model = TFDistilBertModel.from_pretrained('distilbert-base-uncased')
-        self.bert_model.trainable = False
+        self._load_fold_models(version_id)
 
-        self._loaded = True
-        print(f"[ModelManager] All models loaded. Folds available: {list(self.models.keys())}\n")
+    def switch_version(self, version_id: str):
+        """Hot-swap to a different model version (keeps feature extractors loaded)."""
+        if version_id not in MODEL_VERSIONS:
+            raise ValueError(f"Unknown model version: '{version_id}'. Available: {list(MODEL_VERSIONS.keys())}")
+
+        if version_id == self.current_version:
+            print(f"[ModelManager] Version '{version_id}' is already loaded.")
+            return
+
+        self._load_fold_models(version_id)
+
+    def ensure_version(self, version_id: str):
+        """Ensure the requested version is loaded (auto-swap if needed)."""
+        if version_id and version_id != self.current_version:
+            self.switch_version(version_id)
 
     @property
     def available_folds(self):
         return list(self.models.keys())
+
+    @property
+    def version_name(self):
+        if self.current_version and self.current_version in MODEL_VERSIONS:
+            return MODEL_VERSIONS[self.current_version]["name"]
+        return "Unknown"
 
 
 model_manager = ModelManager()
@@ -187,17 +247,21 @@ def extract_visual(video_path: str) -> np.ndarray:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if ret:
-            frame = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(frame.astype(np.float32))
+            pixel_values = model_manager.img_transform(frame)
+            frames.append(pixel_values)
     cap.release()
 
     if not frames:
         return np.zeros((1, VISUAL_FEAT_DIM), dtype=np.float32)
 
-    mean_frame = np.mean(np.array(frames), axis=0)[None]
-    feats = model_manager.eff_model.predict(mean_frame, verbose=0)
-    return feats.astype(np.float32)
+    # Average features across sampled frames
+    batch = torch.stack(frames).to(DEVICE)
+    with torch.no_grad():
+        feats = model_manager.eff_model(batch) # (N, 1280)
+        mean_feat = feats.mean(dim=0, keepdim=True) # (1, 1280)
+    
+    return mean_feat.cpu().numpy().astype(np.float32)
 
 
 def extract_audio(video_path: str) -> np.ndarray:
@@ -258,18 +322,24 @@ def extract_text(video_path: str) -> tuple:
         padding='max_length',
         truncation=True,
         max_length=MAX_TEXT_LEN,
-        return_tensors='np'
+        return_tensors='pt'
     )
-    output = model_manager.bert_model(
-        input_ids=encoded['input_ids'].astype(np.int32),
-        attention_mask=encoded['attention_mask'].astype(np.int32)
-    )
-    feat = output.last_hidden_state[:, 0, :].numpy()
+    input_ids = encoded['input_ids'].to(DEVICE)
+    attention_mask = encoded['attention_mask'].to(DEVICE)
+
+    with torch.no_grad():
+        output = model_manager.bert_model(input_ids=input_ids, attention_mask=attention_mask)
+    
+    feat = output.last_hidden_state[:, 0, :].cpu().numpy()
     return feat.astype(np.float32), transcript
 
 
-def run_inference(video_path: str, fold_nums: Optional[List[int]] = None) -> dict:
+def run_inference(video_path: str, fold_nums: Optional[List[int]] = None, model_version: Optional[str] = None) -> dict:
     """Core inference logic — used by both single and ensemble endpoints."""
+    # Auto-swap model version if requested
+    if model_version:
+        model_manager.ensure_version(model_version)
+
     if fold_nums is None:
         fold_nums = [min(model_manager.available_folds)]
 
@@ -307,6 +377,8 @@ def run_inference(video_path: str, fold_nums: Optional[List[int]] = None) -> dic
         "transcript":        transcript,
         "folds_used":        len(per_fold_probs),
         "per_fold_probs":    [round(p, 4) for p in per_fold_probs],
+        "model_version":     model_manager.current_version,
+        "model_version_name": model_manager.version_name,
     }
 
 
@@ -331,32 +403,57 @@ app.add_middleware(
 # ── Response schemas ──────────────────────────────────────────────────────────
 
 class PredictionResponse(BaseModel):
-    video_name:        str
-    prediction:        str
-    confidence:        float
-    prob_brainrot:     float
-    prob_non_brainrot: float
-    transcript:        str
-    folds_used:        int
-    per_fold_probs:    List[float]
-    processing_time_s: float
+    video_name:         str
+    prediction:         str
+    confidence:         float
+    prob_brainrot:      float
+    prob_non_brainrot:  float
+    transcript:         str
+    folds_used:         int
+    per_fold_probs:     List[float]
+    processing_time_s:  float
+    model_version:      str
+    model_version_name: str
 
 
 class HealthResponse(BaseModel):
-    status:         str
-    device:         str
-    folds_loaded:   List[int]
-    models_ready:   bool
+    status:          str
+    device:          str
+    folds_loaded:    List[int]
+    models_ready:    bool
+    model_version:   str
+    model_version_name: str
 
 
 class ModelInfoResponse(BaseModel):
+    model_version:    str
+    model_version_name: str
+    checkpoint_dir:   str
+    folds_available:  List[int]
+    device:           str
+    visual_dim:       int
+    audio_dim:        int
+    text_dim:         int
+    fusion_dim:       int
+
+
+class ModelVersionInfo(BaseModel):
+    version_id:     str
+    name:           str
     checkpoint_dir: str
-    folds_available: List[int]
-    device:         str
-    visual_dim:     int
-    audio_dim:      int
-    text_dim:       int
-    fusion_dim:     int
+    n_folds:        int
+    is_active:      bool
+
+
+class ModelsListResponse(BaseModel):
+    active_version: str
+    versions:       List[ModelVersionInfo]
+
+
+class SwitchResponse(BaseModel):
+    message:        str
+    active_version: str
+    folds_loaded:   List[int]
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
@@ -374,37 +471,90 @@ async def startup_event():
 async def health_check():
     """Check if the API server and models are ready."""
     return HealthResponse(
-        status       = "ok",
-        device       = str(DEVICE),
-        folds_loaded = model_manager.available_folds,
-        models_ready = model_manager._loaded,
+        status             = "ok",
+        device             = str(DEVICE),
+        folds_loaded       = model_manager.available_folds,
+        models_ready       = model_manager._loaded,
+        model_version      = model_manager.current_version or "",
+        model_version_name = model_manager.version_name,
     )
 
 
 @app.get("/model/info", response_model=ModelInfoResponse, tags=["Status"])
 async def model_info():
     """Get information about the loaded model configuration."""
+    version_cfg = MODEL_VERSIONS.get(model_manager.current_version, {})
     return ModelInfoResponse(
-        checkpoint_dir   = CHECKPOINT_DIR,
-        folds_available  = model_manager.available_folds,
-        device           = str(DEVICE),
-        visual_dim       = VISUAL_FEAT_DIM,
-        audio_dim        = AUDIO_FEAT_DIM,
-        text_dim         = TEXT_FEAT_DIM,
-        fusion_dim       = FUSION_DIM,
+        model_version      = model_manager.current_version or "",
+        model_version_name = model_manager.version_name,
+        checkpoint_dir     = version_cfg.get("checkpoint_dir", ""),
+        folds_available    = model_manager.available_folds,
+        device             = str(DEVICE),
+        visual_dim         = VISUAL_FEAT_DIM,
+        audio_dim          = AUDIO_FEAT_DIM,
+        text_dim           = TEXT_FEAT_DIM,
+        fusion_dim         = FUSION_DIM,
     )
+
+
+@app.get("/models", response_model=ModelsListResponse, tags=["Model Versions"])
+async def list_models():
+    """List all available model versions and which one is currently active."""
+    versions = []
+    for vid, cfg in MODEL_VERSIONS.items():
+        versions.append(ModelVersionInfo(
+            version_id     = vid,
+            name           = cfg["name"],
+            checkpoint_dir = cfg["checkpoint_dir"],
+            n_folds        = cfg["n_folds"],
+            is_active      = (vid == model_manager.current_version),
+        ))
+    return ModelsListResponse(
+        active_version = model_manager.current_version or "",
+        versions       = versions,
+    )
+
+
+@app.post("/models/switch", response_model=SwitchResponse, tags=["Model Versions"])
+async def switch_model(version: str):
+    """
+    Switch the active model version.
+    Available versions can be listed via GET /models.
+    """
+    if version not in MODEL_VERSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown version: '{version}'. Available: {list(MODEL_VERSIONS.keys())}"
+        )
+    try:
+        model_manager.switch_version(version)
+        return SwitchResponse(
+            message        = f"Switched to '{version}' ({MODEL_VERSIONS[version]['name']})",
+            active_version = model_manager.current_version,
+            folds_loaded   = model_manager.available_folds,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.post("/predict", response_model=PredictionResponse, tags=["Inference"])
 async def predict(
-    video: UploadFile = File(..., description="Video file to classify (mp4, avi, mov)")
+    video: UploadFile = File(..., description="Video file to classify (mp4, avi, mov)"),
+    model_version: Optional[str] = None,
 ):
     """
     Classify a video using the best model from Fold 1.
+    Optionally specify model_version ('default' or 'no_yt') as a query parameter.
     Faster than ensemble — good for quick classification.
     """
     if not model_manager._loaded:
         raise HTTPException(status_code=503, detail="Models not loaded yet.")
+
+    if model_version and model_version not in MODEL_VERSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model version: '{model_version}'. Available: {list(MODEL_VERSIONS.keys())}"
+        )
 
     # Validate file type
     allowed = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv"}
@@ -423,7 +573,7 @@ async def predict(
             f.write(content)
 
         start_time = time.time()
-        result     = run_inference(tmp_path, fold_nums=[min(model_manager.available_folds)])
+        result     = run_inference(tmp_path, fold_nums=[min(model_manager.available_folds)], model_version=model_version)
         elapsed    = time.time() - start_time
 
         return PredictionResponse(
@@ -431,6 +581,8 @@ async def predict(
             processing_time_s = round(elapsed, 2),
             **result,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
@@ -440,14 +592,22 @@ async def predict(
 
 @app.post("/predict/ensemble", response_model=PredictionResponse, tags=["Inference"])
 async def predict_ensemble(
-    video: UploadFile = File(..., description="Video file to classify (mp4, avi, mov)")
+    video: UploadFile = File(..., description="Video file to classify (mp4, avi, mov)"),
+    model_version: Optional[str] = None,
 ):
     """
     Classify a video using ALL fold models and average their predictions.
+    Optionally specify model_version ('default' or 'no_yt') as a query parameter.
     More accurate than single-fold — recommended for final results.
     """
     if not model_manager._loaded:
         raise HTTPException(status_code=503, detail="Models not loaded yet.")
+
+    if model_version and model_version not in MODEL_VERSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model version: '{model_version}'. Available: {list(MODEL_VERSIONS.keys())}"
+        )
 
     allowed = {".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv"}
     ext = os.path.splitext(video.filename)[1].lower()
@@ -464,7 +624,7 @@ async def predict_ensemble(
             f.write(content)
 
         start_time = time.time()
-        result     = run_inference(tmp_path, fold_nums=model_manager.available_folds)
+        result     = run_inference(tmp_path, fold_nums=model_manager.available_folds, model_version=model_version)
         elapsed    = time.time() - start_time
 
         return PredictionResponse(
@@ -472,6 +632,8 @@ async def predict_ensemble(
             processing_time_s = round(elapsed, 2),
             **result,
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:
