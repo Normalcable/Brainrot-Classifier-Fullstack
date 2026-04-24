@@ -2,219 +2,312 @@
 <html lang="en">
 
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>BRAINROT DETECTOR</title>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Bebas+Neue&family=DM+Sans:wght@300;400;500&display=swap"
-    rel="stylesheet">
-  <link rel="stylesheet" href="style.css">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brainrot Detector - Multimodal Classifier</title>
+    <meta name="description" content="Academic research dashboard for multimodal brainrot video classification using ML ensemble models.">
+    <!-- Modern Fonts -->
+    <link
+        href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <!-- Chart.js for data visualization -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
-
-  <header>
-    <div class="logo">BRAIN<span>ROT</span> DETECTOR</div>
-    <div class="status-pill" id="statusPill">
-      <div class="status-dot"></div>
-      <span id="statusText">CHECKING...</span>
-    </div>
-  </header>
-
-  <main>
-    <div class="hero">
-      <h1>
-        <span class="line1">IS THIS</span>
-        <span class="line2">BRAINROT?</span>
-      </h1>
-      <p>multimodal · visual + audio + text · 3-fold ensemble</p>
-    </div>
-
-    <!-- Forensic Config & Input -->
-    <div class="f-container">
-      <!-- Config Bar -->
-      <section class="f-config-block">
-        <div class="f-grid-3">
-          <!-- API URL -->
-          <div class="f-space-y">
-            <label class="f-label">API_ENDPOINT_URL</label>
-            <div class="f-input-row">
-              <input type="text" id="apiUrl" class="f-input" value="http://localhost:8000" placeholder="http://localhost:8000">
-              <button class="f-btn-ping" onclick="checkHealth()">PING</button>
+    <div class="dashboard-container">
+        <!-- Sidebar Control Panel -->
+        <aside class="sidebar-control">
+            <div class="sidebar-header">
+                <div class="sidebar-title-row">
+                    <h2>Multimodal Classification</h2>
+                    <button class="theme-toggle" id="themeToggle" title="Toggle dark mode">
+                        <!-- Moon icon (shown in light mode) -->
+                        <svg id="iconMoon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                        <!-- Sun icon (shown in dark mode, hidden by default) -->
+                        <svg id="iconSun" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                            style="display:none;">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                    </button>
+                </div>
+                <p>Research Dashboard v2.0</p>
+                <div class="status-indicator">
+                    <span id="apiStatusDot" class="dot offline"></span>
+                    <span id="apiStatusText" class="mono text-xs">Checking API...</span>
+                </div>
             </div>
-          </div>
-          <!-- Model Version -->
-          <div class="f-space-y">
-            <label class="f-label">MODEL_VERSION</label>
-            <div class="f-toggle-group">
-              <button id="versionDefault" class="f-toggle-btn active" onclick="setVersion('default')">DEFAULT_STABLE</button>
-              <button id="versionNoYt" class="f-toggle-btn" onclick="setVersion('no_yt')">NO_YOUTUBE_FILTER</button>
+
+            <div class="control-groups">
+                <div class="control-group">
+                    <div class="control-label">1. Data Input Stream</div>
+                    <div class="upload-zone" id="uploadZone">
+                        <input type="file" id="fileInput" accept=".mp4,.avi,.mov,.mkv" hidden>
+                        <div class="upload-content">
+                            <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"
+                                fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                                stroke-linejoin="round">
+                                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                                <polyline points="17 8 12 3 7 8"></polyline>
+                                <line x1="12" y1="3" x2="12" y2="15"></line>
+                            </svg>
+                            <span id="uploadLabel">Drag & drop or browse for file</span>
+                            <span id="uploadSize" class="mono text-xs text-muted"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <div class="control-label">2. Core Model Version</div>
+                    <div class="segmented-control" id="modelVersionControl">
+                        <button class="seg-btn" data-val="default">Default Weights</button>
+                        <button class="seg-btn active" data-val="no_yt">No-YouTube Subset</button>
+                        <button class="seg-btn" data-val="compare">Compare Both</button>
+                    </div>
+                    <div class="mono text-xs text-muted" id="activeThresholdHint" style="margin-top: 0.25rem;">
+                        Active threshold: <span id="sidebarThresholdVal" class="text-accent">0.50</span>
+                    </div>
+                </div>
+
+                <div class="control-group">
+                    <div class="control-label">3. Execution Strategy</div>
+                    <div class="segmented-control" id="analysisModeControl">
+                        <button class="seg-btn" data-val="single">Single Fold (O(1))</button>
+                        <button class="seg-btn active" data-val="ensemble">Full Ensemble (O(N))</button>
+                    </div>
+                </div>
             </div>
-          </div>
-          <!-- Analysis Mode -->
-          <div class="f-space-y">
-            <label class="f-label">ANALYSIS_MODE</label>
-            <div class="f-toggle-group">
-              <button id="modeSingle" class="f-toggle-btn active" onclick="setMode('single')">SINGLE_FOLD</button>
-              <button id="modeEnsemble" class="f-toggle-btn" onclick="setMode('ensemble')">3-FOLD_ENSEMBLE</button>
+
+            <div class="action-section">
+                <button id="runBtn" class="primary-action" disabled>Execute Pipeline</button>
             </div>
-          </div>
-        </div>
-      </section>
 
-      <!-- Input Section -->
-      <section class="f-input-section">
-        <!-- Upload Zone -->
-        <div class="f-upload-pane" id="uploadZone">
-          <input type="file" id="fileInput" accept=".mp4,.avi,.mov,.mkv,.webm,.flv" onchange="handleFile(this.files[0])">
-          <div class="f-upload-content">
-            <svg class="f-upload-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-              <path d="M14,2H6A2,2 0 0,0 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2M18,20H6V4H13V9H18V20M12,19L8,15H10.5V12H13.5V15H16L12,19Z" />
-            </svg>
-            <div class="f-upload-text">
-              <div class="f-upload-title">INITIALIZE_DATA_UPLOAD</div>
-              <div class="f-upload-sub">DRAG AND DROP RAW STREAM (MP4, MKV, AVI)</div>
+            <div class="error-panel mono text-xs hidden" id="errorBox"></div>
+        </aside>
+
+        <!-- Main Dashboard View -->
+        <main class="main-dashboard" id="mainDashboard">
+
+            <div class="welcome-screen" id="welcomeScreen">
+                <div class="welcome-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                        <line x1="3" y1="9" x2="21" y2="9"></line>
+                        <line x1="9" y1="21" x2="9" y2="9"></line>
+                    </svg>
+                </div>
+                <p class="mono text-sm">System Ready. Model pipeline awaits execution.</p>
             </div>
-          </div>
-        </div>
-        
-        <!-- URL Input -->
-        <div class="f-url-pane">
-          <label class="f-label">OR_REMOTE_SOURCE_URL</label>
-          <div class="f-url-group">
-            <input type="text" id="remoteUrl" class="f-input" placeholder="https://youtube.com/watch?v=...">
-            <button class="f-btn-validate" onclick="validateLink()">VALIDATE_LINK</button>
-          </div>
-        </div>
-      </section>
 
-      <!-- File Preview (Only visible when file selected) -->
-      <div class="f-file-preview" id="filePreview">
-        <div class="file-icon">🎥</div>
-        <div class="file-meta">
-          <div class="file-name" id="fileName">—</div>
-          <div class="file-size" id="fileSize">—</div>
-        </div>
-        <button class="f-btn-remove" onclick="removeFile()">✕ REMOVE</button>
-      </div>
+            <div class="telemetry-screen hidden" id="telemetryScreen">
+                <h2 class="mono text-muted mb-4 tracking-widest text-sm text-center">ACTIVE INFERENCE TELEMETRY</h2>
 
-      <!-- Action Button -->
-      <div class="f-action-wrapper">
-        <button class="f-btn-start" id="predictBtn" onclick="predict()" disabled>
-          <svg class="f-btn-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M16 11C17.66 11 18.96 12.3 18.96 13.91C18.96 15 18.39 16 17.41 16.5L16 14.1L14.6 16.5C13.62 16 13.06 15 13.06 13.91C13.06 12.3 14.36 11 16 11M3 3V21H21V3H3M5 5H19V19H5V5M7 7V17H9V7H7M11 13V17H13V13H11H11Z"/>
-          </svg>
-          START_ANALYSIS_SEQUENCE
-        </button>
-      </div>
+                <div class="telemetry-grid">
+                    <!-- CPU Card -->
+                    <div class="telemetry-card" data-metric="cpu">
+                        <div class="t-card-header">
+                            <span class="t-card-title">CPU LOAD</span>
+                            <span class="t-card-value" id="telCpuVal">0.0%</span>
+                        </div>
+                        <div class="t-chart-wrap" id="chartWrapCpu">
+                            <canvas id="canvasCpu"></canvas>
+                        </div>
+                        <div class="t-bar-track">
+                            <div class="t-bar-fill t-bar-cpu" id="barCpu" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- RAM Card -->
+                    <div class="telemetry-card" data-metric="ram">
+                        <div class="t-card-header">
+                            <span class="t-card-title">RAM ALLOC</span>
+                            <span class="t-card-value" id="telRamVal">0.0 GB</span>
+                        </div>
+                        <div class="t-chart-wrap" id="chartWrapRam">
+                            <canvas id="canvasRam"></canvas>
+                        </div>
+                        <div class="t-bar-track">
+                            <div class="t-bar-fill t-bar-ram" id="barRam" style="width: 0%"></div>
+                        </div>
+                    </div>
+
+                    <!-- GPU Card -->
+                    <div class="telemetry-card" data-metric="gpu">
+                        <div class="t-card-header">
+                            <span class="t-card-title">GPU LOAD</span>
+                            <span class="t-card-value" id="telGpuVal">0.0%</span>
+                        </div>
+                        <div class="t-chart-wrap" id="chartWrapGpu">
+                            <canvas id="canvasGpu"></canvas>
+                        </div>
+                        <div class="t-bar-track">
+                            <div class="t-bar-fill t-bar-gpu" id="barGpu" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="terminal-log-container mt-4">
+                    <div class="terminal-header flex-between mono text-xs text-muted border-b border-slate pb-2 mb-2">
+                        <span>PIPELINE LOG</span>
+                        <span id="telStage" class="text-clean">Initializing...</span>
+                    </div>
+                    <div class="sys-log mono text-sm" id="sysLog">
+                        <!-- Logs appended here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Visualization Grid -->
+            <div class="dashboard-grid hidden" id="dashboardGrid">
+
+                <!-- Single-Model Verdict (hidden in compare mode) -->
+                <div class="card verdict-card" id="singleVerdictCard">
+                    <div class="verdict-inner">
+                        <div class="verdict-header-row">
+                            <h3 class="mono text-xs text-muted">FINAL CLASSIFICATION VERDICT</h3>
+                            <span class="mono text-xs bg-dark px-2 py-1 rounded" id="confidenceVal">Conf: --</span>
+                        </div>
+                        <div class="verdict-display">
+                            <span id="finalVerdictLabel">--</span>
+                        </div>
+                        <div class="verdict-probabilities mono text-sm mt-2">
+                            <span><span class="text-brainrot">Brainrot:</span> <span id="probBR">--</span></span>
+                            <span class="ml-4"><span class="text-clean">Clean:</span> <span
+                                    id="probClean">--</span></span>
+                        </div>
+                    </div>
+                    <div class="threshold-control">
+                        <label class="mono text-xs flex-between">
+                            <span>DECISION THRESHOLD:</span>
+                        </label>
+                        <div class="threshold-static mt-2">
+                            <div class="threshold-value-display" id="thresholdVal">0.42</div>
+                            <div class="threshold-model-label" id="thresholdModelLabel">Model 1 — Default</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Comparison Verdict (hidden in single mode) -->
+                <div class="comparison-verdict-grid hidden" id="comparisonVerdictGrid">
+                    <div class="comparison-panel" id="comparePanel_default">
+                        <div class="comparison-panel-header">
+                            <span class="model-tag">Model 1 — Default Weights</span>
+                            <span class="threshold-tag">Threshold: 0.42</span>
+                        </div>
+                        <div class="comparison-panel-body">
+                            <div class="comparison-verdict-label" id="compareVerdict_default">--</div>
+                            <div class="comparison-probs">
+                                <span class="text-brainrot">Brainrot:</span> <span id="compareProb_default_br">--</span>
+                                <span class="ml-4"><span class="text-clean">Clean:</span> <span id="compareProb_default_cl">--</span></span>
+                            </div>
+                            <div class="comparison-conf" id="compareConf_default">Confidence: --</div>
+                        </div>
+                    </div>
+                    <div class="comparison-panel" id="comparePanel_no_yt">
+                        <div class="comparison-panel-header">
+                            <span class="model-tag">Model 2 — No-YouTube Subset</span>
+                            <span class="threshold-tag">Threshold: 0.50</span>
+                        </div>
+                        <div class="comparison-panel-body">
+                            <div class="comparison-verdict-label" id="compareVerdict_no_yt">--</div>
+                            <div class="comparison-probs">
+                                <span class="text-brainrot">Brainrot:</span> <span id="compareProb_no_yt_br">--</span>
+                                <span class="ml-4"><span class="text-clean">Clean:</span> <span id="compareProb_no_yt_cl">--</span></span>
+                            </div>
+                            <div class="comparison-conf" id="compareConf_no_yt">Confidence: --</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Comparison Metrics (hidden in single mode) -->
+                <div class="comparison-metrics-grid hidden" id="comparisonMetricsGrid">
+                    <div class="card">
+                        <h3 class="mono text-xs text-muted mb-4">PIPELINE LATENCY — DEFAULT</h3>
+                        <div class="metrics-list mono text-sm" id="compareMetrics_default"></div>
+                        <div class="total-time mono text-sm mt-4 border-t border-slate pt-3 flex-between">
+                            <span class="text-muted">TOTAL TIME:</span>
+                            <span class="text-accent" id="compareTotalTime_default">--</span>
+                        </div>
+                    </div>
+                    <div class="card">
+                        <h3 class="mono text-xs text-muted mb-4">PIPELINE LATENCY — NO-YT</h3>
+                        <div class="metrics-list mono text-sm" id="compareMetrics_no_yt"></div>
+                        <div class="total-time mono text-sm mt-4 border-t border-slate pt-3 flex-between">
+                            <span class="text-muted">TOTAL TIME:</span>
+                            <span class="text-accent" id="compareTotalTime_no_yt">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Modality Breakdown -->
+                <div class="card modality-card">
+                    <h3 class="mono text-xs text-muted mb-2">MODALITY ATTENTION WEIGHTS (L2 NORM)</h3>
+                    <div class="chart-container">
+                        <canvas id="modalityChart"></canvas>
+                    </div>
+
+                </div>
+
+                <!-- Temporal Graph -->
+                <div class="card timeline-card">
+                    <h3 class="mono text-xs text-muted mb-2">TEMPORAL PROBABILITY DENSITY (VISUAL SEQUENCE)</h3>
+                    <div class="chart-container relative">
+                        <canvas id="timelineChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Pipeline Metrics (single mode) -->
+                <div class="card metrics-card" id="singleMetricsCard">
+                    <h3 class="mono text-xs text-muted mb-4">PIPELINE LATENCY BREAKDOWN</h3>
+                    <div class="metrics-list mono text-sm" id="metricsList">
+                        <!-- Populated dynamically -->
+                    </div>
+                    <div class="total-time mono text-sm mt-4 border-t border-slate pt-3 flex-between">
+                        <span class="text-muted">TOTAL TIME:</span>
+                        <span class="text-accent" id="totalTimeLabel">--</span>
+                    </div>
+                </div>
+
+                <!-- Transcript / Metadata -->
+                <div class="card data-card">
+                    <h3 class="mono text-xs text-muted mb-2">EXTRACTED VTT TRANSCRIPT</h3>
+                    <div class="transcript-box mono text-sm" id="transcriptBox">...</div>
+                    <div class="file-meta mono text-xs text-muted mt-4 pt-3 border-t border-slate">
+                        <span id="metaFile">File: --</span> |
+                        <span id="metaFolds">Folds: --</span>
+                    </div>
+                </div>
+
+                <!-- Hardware Diagnostics Summary (full-width, bottom of grid) -->
+                <div class="card hardware-card hidden" id="hardwareCard">
+                    <h3 class="mono text-xs text-muted mb-4">HARDWARE DIAGNOSTICS SUMMARY</h3>
+                    <div class="hw-metrics-grid" id="hwMetricsGrid">
+                        <!-- 4 metric tiles populated by JS -->
+                    </div>
+                    <div class="hw-chart-container mt-4">
+                        <h4 class="mono text-xs text-muted mb-2">SYSTEM STRESS TRAJECTORY</h4>
+                        <canvas id="hwTrajectoryChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+        </main>
     </div>
-
-    <!-- Loading -->
-    <div class="loading-panel" id="loadingPanel">
-      <div class="spinner"></div>
-      <div class="loading-text" id="loadingText">UPLOADING VIDEO...</div>
-      <div class="progress-steps">
-        <div class="step" id="step1"><span class="step-icon">👁️</span>VISUAL</div>
-        <div class="step" id="step2"><span class="step-icon">🎧</span>AUDIO</div>
-        <div class="step" id="step3"><span class="step-icon">📝</span>TEXT</div>
-        <div class="step" id="step4"><span class="step-icon">🧠</span>FUSION</div>
-      </div>
-    </div>
-
-    <!-- Error -->
-    <div class="error-panel" id="errorPanel"></div>
-
-    <!-- Result -->
-    <div class="result-panel" id="resultPanel">
-      <div class="verdict-card" id="verdictCard">
-        <div class="verdict-header">
-          <div class="verdict-emoji" id="verdictEmoji"></div>
-          <div class="verdict-label" id="verdictLabel"></div>
-        </div>
-
-        <div class="confidence-bar-wrap">
-          <div class="confidence-meta">
-            <span>CONFIDENCE</span>
-            <span id="confPct"></span>
-          </div>
-          <div class="confidence-bar">
-            <div class="confidence-fill" id="confFill"></div>
-          </div>
-        </div>
-
-        <div class="probs-grid">
-          <div class="prob-item brainrot-prob">
-            <div class="prob-item-label">🔴 Brainrot</div>
-            <div class="prob-item-value" id="probBR">—</div>
-          </div>
-          <div class="prob-item non-brainrot-prob">
-            <div class="prob-item-label">🟢 Non-Brainrot</div>
-            <div class="prob-item-value" id="probNBR">—</div>
-          </div>
-        </div>
-      </div>
-
-      <div class="details-grid">
-        <div class="detail-card">
-          <div class="detail-label">📁 File</div>
-          <div class="detail-value" id="detFile" style="word-break:break-all;font-size:0.72rem">—</div>
-        </div>
-        <div class="detail-card">
-          <div class="detail-label">⚡ Process Time</div>
-          <div class="detail-value" id="detTime">—</div>
-        </div>
-        <div class="detail-card">
-          <div class="detail-label">🔁 Folds Used</div>
-          <div class="detail-value" id="detFolds">—</div>
-        </div>
-        <div class="detail-card">
-          <div class="detail-label">📡 Mode</div>
-          <div class="detail-value" id="detMode">—</div>
-        </div>
-        <div class="detail-card">
-          <div class="detail-label">🧠 Model Version</div>
-          <div class="detail-value" id="detVersion" style="font-size:0.72rem">—</div>
-        </div>
-      </div>
-
-      <div class="fold-bars" id="foldBars"></div>
-
-      <div class="transcript-card">
-        <div class="transcript-label">💬 TRANSCRIPT</div>
-        <div class="transcript-text" id="transcriptText">—</div>
-      </div>
-    </div>
-
-    <!-- History -->
-    <div class="history-section">
-      <div class="section-title">RECENT CLASSIFICATIONS</div>
-      <div class="history-list" id="historyList">
-        <div class="empty-history">No classifications yet — upload a video to get started.</div>
-      </div>
-    </div>
-  </main>
-
-  <!-- Disclaimer Modal -->
-  <div id="disclaimerModal" class="modal-overlay">
-    <div class="modal-content">
-      <div class="modal-header">
-        <span class="modal-icon">⚠️</span>
-        <h2 class="modal-title">DISCLAIMER</h2>
-      </div>
-      <div class="modal-body">
-        <p>This is an <strong>experimental</strong> web application designed for research purposes.</p>
-        <p>By using this tool, you acknowledge that:</p>
-        <ul>
-          <li>I will steal all you data and your money</li>
-        </ul>
-      </div>
-      <div class="modal-footer">
-        <button class="btn-predict" onclick="acceptDisclaimer()">I UNDERSTAND</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="script.js"></script>
+    <script src="script.js"></script>
 </body>
 
 </html>

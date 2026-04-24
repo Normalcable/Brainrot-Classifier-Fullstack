@@ -28,6 +28,11 @@ import tempfile
 import warnings
 warnings.filterwarnings("ignore")
 
+import psutil
+import GPUtil
+import asyncio
+import json
+
 import numpy as np
 import torch
 import torch.nn as nn
@@ -53,16 +58,22 @@ MAX_FRAMES      = 16
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+ACTIVE_TASKS_STATE = {}
+
+def update_task_state(task_id: str, stage: str, log: str):
+    if task_id:
+        ACTIVE_TASKS_STATE[task_id] = {"stage": stage, "log": log}
+
 # ── MODEL VERSIONS ──────────────────────────────────────────────────────────
 MODEL_VERSIONS = {
     "default": {
         "name": "Default (Full Dataset)",
-        "checkpoint_dir": "./checkpoints",
+        "checkpoint_dir": "./model1_checkpoints",
         "n_folds": 3,
     },
     "no_yt": {
         "name": "No YouTube",
-        "checkpoint_dir": "./checkpoint2",
+        "checkpoint_dir": "./model2_checkpoints",
         "n_folds": 3,
     },
 }
@@ -96,6 +107,7 @@ class AttentionFusion(nn.Module):
     def forward(self, feats):
         cat     = torch.cat(feats, dim=-1)
         weights = torch.softmax(self.attn(cat), dim=-1)
+        self.last_weights = weights
         stacked = torch.stack(feats, dim=1)
         fused   = (weights.unsqueeze(-1) * stacked).sum(dim=1)
         return fused
@@ -235,8 +247,9 @@ model_manager = ModelManager()
 # FEATURE EXTRACTION
 # =============================================================================
 
-def extract_visual(video_path: str) -> np.ndarray:
+def extract_visual(video_path: str, task_id: str = None) -> np.ndarray:
     import cv2
+    update_task_state(task_id, "Extracting Visual", "[00:00] Initializing OpenCV visual sequence extraction...")
 
     cap    = cv2.VideoCapture(video_path)
     total  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -255,17 +268,16 @@ def extract_visual(video_path: str) -> np.ndarray:
     if not frames:
         return np.zeros((1, VISUAL_FEAT_DIM), dtype=np.float32)
 
-    # Average features across sampled frames
     batch = torch.stack(frames).to(DEVICE)
     with torch.no_grad():
         feats = model_manager.eff_model(batch) # (N, 1280)
-        mean_feat = feats.mean(dim=0, keepdim=True) # (1, 1280)
     
-    return mean_feat.cpu().numpy().astype(np.float32)
+    return feats.cpu().numpy().astype(np.float32)
 
 
-def extract_audio(video_path: str) -> np.ndarray:
+def extract_audio(video_path: str, task_id: str = None) -> np.ndarray:
     import librosa
+    update_task_state(task_id, "Extracting Audio", "[00:00] Running FFmpeg audio extraction to 22.05kHz...")
 
     audio_path = video_path + "_audio.wav"
     ret = os.system(f'ffmpeg -i "{video_path}" -ac 1 -ar 22050 "{audio_path}" -y -loglevel quiet')
@@ -299,8 +311,9 @@ def extract_audio(video_path: str) -> np.ndarray:
         return np.zeros((1, AUDIO_FEAT_DIM), dtype=np.float32)
 
 
-def extract_text(video_path: str) -> tuple:
+def extract_text(video_path: str, task_id: str = None) -> tuple:
     """Returns (feature_array, transcript_string)"""
+    update_task_state(task_id, "Extracting Text", "[00:00] Running Whisper transcript generation...")
     transcript = "no speech detected"
 
     try:
@@ -334,8 +347,9 @@ def extract_text(video_path: str) -> tuple:
     return feat.astype(np.float32), transcript
 
 
-def run_inference(video_path: str, fold_nums: Optional[List[int]] = None, model_version: Optional[str] = None) -> dict:
+def run_inference(video_path: str, fold_nums: Optional[List[int]] = None, model_version: Optional[str] = None, task_id: str = None) -> dict:
     """Core inference logic — used by both single and ensemble endpoints."""
+    update_task_state(task_id, "Starting Inference", f"Initializing run across {len(fold_nums) if fold_nums else 1} fold(s)...")
     # Auto-swap model version if requested
     if model_version:
         model_manager.ensure_version(model_version)
@@ -344,15 +358,23 @@ def run_inference(video_path: str, fold_nums: Optional[List[int]] = None, model_
         fold_nums = [min(model_manager.available_folds)]
 
     # Extract features once, reuse across folds
-    vis_feat            = extract_visual(video_path)
-    aud_feat            = extract_audio(video_path)
-    txt_feat, transcript = extract_text(video_path)
+    t0 = time.time()
+    vis_seq = extract_visual(video_path, task_id=task_id)
+    vis_feat = np.mean(vis_seq, axis=0, keepdims=True)
+    t1 = time.time()
+    aud_feat = extract_audio(video_path, task_id=task_id)
+    t2 = time.time()
+    txt_feat, transcript = extract_text(video_path, task_id=task_id)
+    t3 = time.time()
 
+    update_task_state(task_id, "Fusing Modalities", "Computing final probabilities across folds...")
     vis_t = torch.tensor(vis_feat, dtype=torch.float32).to(DEVICE)
     aud_t = torch.tensor(aud_feat, dtype=torch.float32).to(DEVICE)
     txt_t = torch.tensor(txt_feat, dtype=torch.float32).to(DEVICE)
 
     per_fold_probs = []
+    attentions_list = []
+    
     for fold_num in fold_nums:
         if fold_num not in model_manager.models:
             continue
@@ -360,14 +382,30 @@ def run_inference(video_path: str, fold_nums: Optional[List[int]] = None, model_
         with torch.no_grad():
             logits = model(vis_t, aud_t, txt_t)
             probs  = torch.softmax(logits, dim=-1)
+            attentions_list.append(model.fusion.last_weights[0].cpu().numpy().tolist())
         per_fold_probs.append(float(probs[0][1].cpu()))
 
     if not per_fold_probs:
         raise HTTPException(status_code=500, detail="No valid fold models available.")
 
+    temporal_probs = []
+    first_fold = model_manager.models.get(fold_nums[0])
+    if first_fold is not None:
+        with torch.no_grad():
+            vis_seq_t = torch.tensor(vis_seq, dtype=torch.float32).to(DEVICE)
+            N = vis_seq_t.size(0)
+            aud_rep = aud_t.repeat(N, 1)
+            txt_rep = txt_t.repeat(N, 1)
+            t_logits = first_fold(vis_seq_t, aud_rep, txt_rep)
+            t_probs = torch.softmax(t_logits, dim=-1)[:, 1].cpu().numpy()
+            temporal_probs = t_probs.tolist()
+
+    t4 = time.time()
+
     avg_prob        = float(np.mean(per_fold_probs))
     prediction      = "BRAINROT" if avg_prob >= 0.5 else "NON_BRAINROT"
     confidence      = avg_prob if prediction == "BRAINROT" else 1 - avg_prob
+    avg_attention = np.mean(attentions_list, axis=0).tolist() if attentions_list else [0.33, 0.33, 0.34]
 
     return {
         "prediction":        prediction,
@@ -379,6 +417,14 @@ def run_inference(video_path: str, fold_nums: Optional[List[int]] = None, model_
         "per_fold_probs":    [round(p, 4) for p in per_fold_probs],
         "model_version":     model_manager.current_version,
         "model_version_name": model_manager.version_name,
+        "pipeline_metrics": {
+            "visual_ext_s": round(t1 - t0, 3),
+            "audio_ext_s": round(t2 - t1, 3),
+            "text_ext_s": round(t3 - t2, 3),
+            "inference_s": round(t4 - t3, 3)
+        },
+        "modality_weights": [round(w, 4) for w in avg_attention],
+        "temporal_probs": [round(p, 4) for p in temporal_probs]
     }
 
 
@@ -402,6 +448,12 @@ app.add_middleware(
 
 # ── Response schemas ──────────────────────────────────────────────────────────
 
+class PipelineMetrics(BaseModel):
+    visual_ext_s: float
+    audio_ext_s: float
+    text_ext_s: float
+    inference_s: float
+
 class PredictionResponse(BaseModel):
     video_name:         str
     prediction:         str
@@ -414,6 +466,9 @@ class PredictionResponse(BaseModel):
     processing_time_s:  float
     model_version:      str
     model_version_name: str
+    pipeline_metrics:   PipelineMetrics
+    modality_weights:   List[float]
+    temporal_probs:     List[float]
 
 
 class HealthResponse(BaseModel):
@@ -537,11 +592,50 @@ async def switch_model(version: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+from fastapi.responses import StreamingResponse
+
+async def telemetry_generator(task_id: str):
+    while True:
+        if task_id not in ACTIVE_TASKS_STATE:
+            yield "data: {\"status\": \"done\"}\n\n"
+            break
+        state = ACTIVE_TASKS_STATE[task_id]
+        cpu = psutil.cpu_percent()
+        ram = psutil.virtual_memory().used / (1024**3)
+        gpu_percent = 0.0
+        vram_gb = 0.0
+        try:
+            gpus = GPUtil.getGPUs()
+            if gpus:
+                gpu = gpus[0]
+                gpu_percent = gpu.load * 100
+                vram_gb = gpu.memoryUsed / 1024
+        except:
+            pass
+            
+        payload = {
+            "cpu_percent": cpu,
+            "ram_gb": round(ram, 1),
+            "gpu_percent": round(gpu_percent, 1),
+            "vram_gb": round(vram_gb, 1),
+            "stage": state.get("stage", "Initializing"),
+            "log_message": state.get("log", "Setting up telemetry...")
+        }
+        yield f"data: {json.dumps(payload)}\n\n"
+        await asyncio.sleep(0.5)
+
+@app.get("/telemetry/{task_id}", tags=["Telemetry"])
+async def get_telemetry(task_id: str):
+    return StreamingResponse(telemetry_generator(task_id), media_type="text/event-stream")
+
+
 @app.post("/predict", response_model=PredictionResponse, tags=["Inference"])
 async def predict(
     video: UploadFile = File(..., description="Video file to classify (mp4, avi, mov)"),
     model_version: Optional[str] = None,
+    task_id: Optional[str] = None,
 ):
+    if task_id: ACTIVE_TASKS_STATE[task_id] = {"stage": "Uploading", "log": "Receiving video..."}
     """
     Classify a video using the best model from Fold 1.
     Optionally specify model_version ('default' or 'no_yt') as a query parameter.
@@ -573,7 +667,7 @@ async def predict(
             f.write(content)
 
         start_time = time.time()
-        result     = run_inference(tmp_path, fold_nums=[min(model_manager.available_folds)], model_version=model_version)
+        result     = await asyncio.to_thread(run_inference, tmp_path, [min(model_manager.available_folds)], model_version, task_id)
         elapsed    = time.time() - start_time
 
         return PredictionResponse(
@@ -588,13 +682,17 @@ async def predict(
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+        if task_id and task_id in ACTIVE_TASKS_STATE:
+            del ACTIVE_TASKS_STATE[task_id]
 
 
 @app.post("/predict/ensemble", response_model=PredictionResponse, tags=["Inference"])
 async def predict_ensemble(
     video: UploadFile = File(..., description="Video file to classify (mp4, avi, mov)"),
     model_version: Optional[str] = None,
+    task_id: Optional[str] = None,
 ):
+    if task_id: ACTIVE_TASKS_STATE[task_id] = {"stage": "Uploading", "log": "Receiving ensemble video..."}
     """
     Classify a video using ALL fold models and average their predictions.
     Optionally specify model_version ('default' or 'no_yt') as a query parameter.
@@ -624,7 +722,7 @@ async def predict_ensemble(
             f.write(content)
 
         start_time = time.time()
-        result     = run_inference(tmp_path, fold_nums=model_manager.available_folds, model_version=model_version)
+        result     = await asyncio.to_thread(run_inference, tmp_path, model_manager.available_folds, model_version, task_id)
         elapsed    = time.time() - start_time
 
         return PredictionResponse(
@@ -639,3 +737,5 @@ async def predict_ensemble(
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+        if task_id and task_id in ACTIVE_TASKS_STATE:
+            del ACTIVE_TASKS_STATE[task_id]
