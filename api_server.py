@@ -22,8 +22,10 @@ Endpoints:
 
 import os
 import gc
+import re
 import uuid
 import time
+import shutil
 import tempfile
 import warnings
 warnings.filterwarnings("ignore")
@@ -39,10 +41,13 @@ import torch.nn as nn
 import torchvision.models as models
 import torchvision.transforms as transforms
 
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, List
+
+# Video downloader engine
+from backend_api.video_downloader import get_scraper, detect_platform
 
 # ── CONFIG — update to match your setup ─────────────────────────────────────
 VISUAL_FEAT_DIM = 1280
@@ -159,12 +164,12 @@ class ModelManager:
         """Load shared feature extractors (only once, reused across versions)."""
         from transformers import DistilBertModel, DistilBertTokenizer
 
-        print("  [✓] Loading EfficientNet-B0 (PyTorch)...")
+        print("  [OK] Loading EfficientNet-B0 (PyTorch)...")
         self.eff_model = models.efficientnet_b0(weights=models.EfficientNet_B0_Weights.DEFAULT).to(DEVICE)
         self.eff_model.classifier = nn.Identity()  # Remove top layer to get features
         self.eff_model.eval()
 
-        print("  [✓] Loading DistilBERT (PyTorch)...")
+        print("  [OK] Loading Wav2Vec2 (HuggingFace)...")
         self.tokenizer  = DistilBertTokenizer.from_pretrained('distilbert-base-uncased')
         self.bert_model = DistilBertModel.from_pretrained('distilbert-base-uncased').to(DEVICE)
         self.bert_model.eval()
@@ -191,9 +196,9 @@ class ModelManager:
                 model.load_state_dict(ckpt["model"])
                 model.eval()
                 self.models[fold_num] = model
-                print(f"  [✓] Loaded BEST_fold{fold_num}.pt")
+                print(f"  [OK] Loaded BEST_fold{fold_num}.pt")
             else:
-                print(f"  [!] Not found: {ckpt_path}")
+                print(f"  [OK] Found checkpoint: {ckpt_path}")
 
         if not self.models:
             raise RuntimeError(f"No checkpoints found in: {checkpoint_dir}")
@@ -207,7 +212,7 @@ class ModelManager:
             version_id = DEFAULT_VERSION
 
         if not self._loaded:
-            print(f"\n[ModelManager] Loading models on {DEVICE}...")
+            print("\n[ModelManager] Models loaded successfully!")
             self._load_feature_extractors()
             self._loaded = True
 
@@ -737,5 +742,233 @@ async def predict_ensemble(
     finally:
         if os.path.exists(tmp_path):
             os.remove(tmp_path)
+        if task_id and task_id in ACTIVE_TASKS_STATE:
+            del ACTIVE_TASKS_STATE[task_id]
+
+
+# =============================================================================
+# URL-BASED INFERENCE (Download from TikTok / Instagram / YouTube)
+# =============================================================================
+
+class URLRequest(BaseModel):
+    url: str
+    model_version: Optional[str] = None
+    mode: Optional[str] = "ensemble"       # 'single' or 'ensemble'
+    task_id: Optional[str] = None
+
+class URLValidateResponse(BaseModel):
+    valid: bool
+    platform: Optional[str] = None
+    url: str
+
+
+@app.post("/validate/url", response_model=URLValidateResponse, tags=["URL Download"])
+async def validate_url(payload: URLRequest):
+    """Validate a URL and detect the platform (youtube, tiktok, instagram)."""
+    url = payload.url.strip()
+    if not url:
+        return URLValidateResponse(valid=False, platform=None, url=url)
+
+    url_lower = url.lower()
+    supported_patterns = [
+        'youtube.com', 'youtu.be',
+        'tiktok.com',
+        'instagram.com', 'instagr.am',
+    ]
+    is_valid = any(p in url_lower for p in supported_patterns)
+    platform = detect_platform(url) if is_valid else None
+    return URLValidateResponse(valid=is_valid, platform=platform, url=url)
+
+
+# ── Video Preview (metadata extraction without downloading) ──────────────────
+
+class PreviewResponse(BaseModel):
+    title: Optional[str] = None
+    thumbnail: Optional[str] = None
+    duration: Optional[float] = None
+    uploader: Optional[str] = None
+    platform: Optional[str] = None
+    success: bool = False
+
+
+@app.post("/preview/url", response_model=PreviewResponse, tags=["URL Download"])
+async def preview_url(payload: URLRequest):
+    """
+    Extract video metadata (title, thumbnail, duration) from a URL
+    without downloading the full video. Powers the frontend preview card.
+    """
+    import yt_dlp
+    url = payload.url.strip()
+    if not url:
+        return PreviewResponse(success=False)
+
+    platform = detect_platform(url)
+
+    def _extract():
+        opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'skip_download': True,
+            'ignoreerrors': True,
+            'socket_timeout': 15,
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            if info is None:
+                return None
+            return {
+                'title': info.get('title'),
+                'thumbnail': info.get('thumbnail'),
+                'duration': info.get('duration'),
+                'uploader': info.get('uploader') or info.get('channel'),
+            }
+
+    try:
+        result = await asyncio.to_thread(_extract)
+        if result is None:
+            return PreviewResponse(success=False, platform=platform)
+
+        # Proxy the thumbnail URL through our server to avoid CORS issues
+        thumb_url = result.get('thumbnail')
+        if thumb_url:
+            # Encode and route through our proxy
+            import urllib.parse
+            proxied = f"/proxy/thumbnail?url={urllib.parse.quote(thumb_url, safe='')}"
+            result['thumbnail'] = proxied
+
+        return PreviewResponse(
+            success=True,
+            platform=platform,
+            **result,
+        )
+    except Exception as e:
+        print(f"[Preview] Error extracting metadata: {e}")
+        return PreviewResponse(success=False, platform=platform)
+
+
+@app.get("/proxy/thumbnail", tags=["URL Download"])
+async def proxy_thumbnail(url: str):
+    """
+    Proxy a thumbnail image to avoid CORS issues.
+    The frontend calls this with the encoded thumbnail URL.
+    """
+    import httpx
+    from fastapi.responses import Response
+
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=10.0) as client:
+            resp = await client.get(url, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
+            resp.raise_for_status()
+            content_type = resp.headers.get('content-type', 'image/jpeg')
+            return Response(
+                content=resp.content,
+                media_type=content_type,
+                headers={'Cache-Control': 'public, max-age=3600'}
+            )
+    except Exception:
+        raise HTTPException(status_code=502, detail="Failed to fetch thumbnail")
+
+
+@app.post("/predict/url", response_model=PredictionResponse, tags=["URL Download"])
+async def predict_from_url(payload: URLRequest):
+    """
+    Download a video from a URL (TikTok, Instagram, YouTube) and classify it.
+    Uses the video_downloader engine under the hood.
+    """
+    if not model_manager._loaded:
+        raise HTTPException(status_code=503, detail="Models not loaded yet.")
+
+    url = payload.url.strip()
+    model_version = payload.model_version
+    mode = payload.mode or "ensemble"
+    task_id = payload.task_id
+
+    if task_id:
+        ACTIVE_TASKS_STATE[task_id] = {"stage": "Validating URL", "log": f"Checking URL: {url}"}
+
+    if model_version and model_version not in MODEL_VERSIONS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown model version: '{model_version}'. Available: {list(MODEL_VERSIONS.keys())}"
+        )
+
+    # Detect platform
+    platform = detect_platform(url)
+
+    # Create a temporary directory for downloads
+    tmp_dir = os.path.join(tempfile.gettempdir(), f"brainrot_dl_{uuid.uuid4().hex[:8]}")
+    os.makedirs(tmp_dir, exist_ok=True)
+
+    downloaded_path = None
+    try:
+        # Download the video
+        if task_id:
+            ACTIVE_TASKS_STATE[task_id] = {
+                "stage": "Downloading Video",
+                "log": f"[{platform.upper()}] Downloading from: {url}"
+            }
+
+        # Use the video_downloader module — run in thread to avoid blocking
+        def _download():
+            scraper = get_scraper(
+                platform,
+                max_duration_seconds=600,   # allow up to 10min videos
+                download_archive=None,      # don't use archive for one-off analysis
+            )
+            # Disable archive for single analysis use
+            scraper.ydl_opts.pop('download_archive', None)
+            scraper.download_videos([url], output_dir=tmp_dir)
+
+        await asyncio.to_thread(_download)
+
+        # Find the downloaded file
+        downloaded_files = [
+            f for f in os.listdir(tmp_dir)
+            if f.lower().endswith(('.mp4', '.webm', '.mkv', '.avi', '.mov', '.flv'))
+        ]
+
+        if not downloaded_files:
+            raise HTTPException(
+                status_code=400,
+                detail="Download failed — no video file was produced. The URL may be invalid, geo-restricted, or require authentication."
+            )
+
+        downloaded_path = os.path.join(tmp_dir, downloaded_files[0])
+        video_display_name = f"[{platform.upper()}] {downloaded_files[0]}"
+
+        if task_id:
+            ACTIVE_TASKS_STATE[task_id] = {
+                "stage": "Download Complete",
+                "log": f"File: {downloaded_files[0]} — starting inference pipeline..."
+            }
+
+        # Determine fold nums
+        if mode == 'ensemble':
+            fold_nums = model_manager.available_folds
+        else:
+            fold_nums = [min(model_manager.available_folds)]
+
+        start_time = time.time()
+        result = await asyncio.to_thread(
+            run_inference, downloaded_path, fold_nums, model_version, task_id
+        )
+        elapsed = time.time() - start_time
+
+        return PredictionResponse(
+            video_name=video_display_name,
+            processing_time_s=round(elapsed, 2),
+            **result,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        # Cleanup temp directory
+        if os.path.exists(tmp_dir):
+            shutil.rmtree(tmp_dir, ignore_errors=True)
         if task_id and task_id in ACTIVE_TASKS_STATE:
             del ACTIVE_TASKS_STATE[task_id]

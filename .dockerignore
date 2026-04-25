@@ -1,0 +1,12 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+.env
+frontend_web/
+sample design/
+media_false_negative/
+media_passed/
+test_video.mp4
+brainrot-detector.zip

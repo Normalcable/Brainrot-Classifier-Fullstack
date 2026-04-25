@@ -3,7 +3,7 @@
   Refactored for strict execution flow, reactive UI, and Chart.js integration.
 */
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "https://normalcable-brainrot-detector-api.hf.space";
 
 // --- Global App State ---
 const THRESHOLD_MAP = { default: 0.42, no_yt: 0.50 };
@@ -11,6 +11,9 @@ const THRESHOLD_MAP = { default: 0.42, no_yt: 0.50 };
 const AppState = {
     inputs: {
         file: null,
+        url: null,
+        inputMode: 'file',       // 'file' or 'url'
+        detectedPlatform: null,
         modelVersion: 'no_yt',
         mode: 'ensemble'
     },
@@ -27,11 +30,22 @@ const AppState = {
 const UI = {
     statusDot: document.getElementById('apiStatusDot'),
     statusText: document.getElementById('apiStatusText'),
+    wakeApiBtn: document.getElementById('wakeApiBtn'),
     
     uploadZone: document.getElementById('uploadZone'),
     fileInput: document.getElementById('fileInput'),
     uploadLabel: document.getElementById('uploadLabel'),
     uploadSize: document.getElementById('uploadSize'),
+    
+    // Input tabs & URL panel
+    tabFile: document.getElementById('tabFile'),
+    tabUrl: document.getElementById('tabUrl'),
+    panelFile: document.getElementById('panelFile'),
+    panelUrl: document.getElementById('panelUrl'),
+    urlInput: document.getElementById('urlInput'),
+    urlStatus: document.getElementById('urlStatus'),
+    urlDetected: document.getElementById('urlDetected'),
+    platformBadges: document.querySelectorAll('.platform-badge'),
     
     versionBtns: document.querySelectorAll('#modelVersionControl .seg-btn'),
     modeBtns: document.querySelectorAll('#analysisModeControl .seg-btn'),
@@ -229,24 +243,56 @@ async function checkHealth() {
         if(data.models_ready) {
             AppState.apiReady = true;
             UI.statusDot.className = 'dot online';
-            UI.statusText.textContent = `Online (Folds: ${data.folds_loaded.length}) - ${data.model_version_name}`;
+            UI.statusText.textContent = `API Online • Engine Ready (Folds: ${data.folds_loaded.length})`;
+            if(UI.wakeApiBtn) UI.wakeApiBtn.classList.add('hidden');
         } else {
-            setOffline('Loading models...');
+            setOffline('Loading models...', false);
         }
     } catch (e) {
-        setOffline('Connection Failed');
+        setOffline('Connection Failed', true);
     }
     validateExecutionState();
 }
 
-function setOffline(msg) {
+function setOffline(msg, showWake = false) {
     AppState.apiReady = false;
     UI.statusDot.className = 'dot offline';
     UI.statusText.textContent = msg;
+    if(UI.wakeApiBtn) {
+        if(showWake) UI.wakeApiBtn.classList.remove('hidden');
+        else UI.wakeApiBtn.classList.add('hidden');
+    }
+}
+
+async function wakeUpApi() {
+    if(!UI.wakeApiBtn) return;
+    UI.wakeApiBtn.disabled = true;
+    UI.wakeApiBtn.textContent = 'Waking...';
+    setOffline('Sending wake signal...', true);
+    
+    try {
+        // High timeout to wait for HF space cold start (can take a few minutes)
+        const res = await fetch(`${API_BASE}/health`, { signal: AbortSignal.timeout(120000) });
+        const data = await res.json();
+        if(data.models_ready) {
+            checkHealth();
+        } else {
+            setOffline('Still loading...', true);
+        }
+    } catch (e) {
+        setOffline('Wake failed. Try again.', true);
+    } finally {
+        UI.wakeApiBtn.disabled = false;
+        UI.wakeApiBtn.textContent = 'Wake API';
+    }
 }
 
 // --- Event Binders ---
 function bindEvents() {
+    // 0. Input Source Tab Switching
+    UI.tabFile.addEventListener('click', () => switchInputTab('file'));
+    UI.tabUrl.addEventListener('click', () => switchInputTab('url'));
+
     // 1. Upload Behavior
     UI.uploadZone.addEventListener('click', () => UI.fileInput.click());
     UI.uploadZone.addEventListener('dragover', (e) => { e.preventDefault(); UI.uploadZone.classList.add('dragover'); });
@@ -258,6 +304,32 @@ function bindEvents() {
     });
     UI.fileInput.addEventListener('change', (e) => {
         if(e.target.files[0]) handleFile(e.target.files[0]);
+    });
+
+    // 1b. URL Input Behavior
+    let urlDebounce = null;
+    UI.urlInput.addEventListener('input', () => {
+        clearTimeout(urlDebounce);
+        const val = UI.urlInput.value.trim();
+        if (!val) {
+            resetUrlState();
+            return;
+        }
+        // Show spinner
+        UI.urlStatus.innerHTML = '<div class="status-spinner"></div>';
+        urlDebounce = setTimeout(() => validateUrl(val), 400);
+    });
+
+    // Allow paste to trigger instantly
+    UI.urlInput.addEventListener('paste', () => {
+        clearTimeout(urlDebounce);
+        setTimeout(() => {
+            const val = UI.urlInput.value.trim();
+            if (val) {
+                UI.urlStatus.innerHTML = '<div class="status-spinner"></div>';
+                validateUrl(val);
+            }
+        }, 50);
     });
 
     // 2. Segmented Controls — Model Version (with threshold mapping)
@@ -276,6 +348,7 @@ function bindEvents() {
 
     // 4. Execution
     UI.runBtn.addEventListener('click', executePipeline);
+    if(UI.wakeApiBtn) UI.wakeApiBtn.addEventListener('click', wakeUpApi);
 
     // Initialize threshold display
     updateThresholdDisplay();
@@ -313,8 +386,150 @@ function handleFile(file) {
     validateExecutionState();
 }
 
+function switchInputTab(tab) {
+    AppState.inputs.inputMode = tab;
+    // Update tab buttons
+    UI.tabFile.classList.toggle('active', tab === 'file');
+    UI.tabUrl.classList.toggle('active', tab === 'url');
+    // Toggle panels
+    if (tab === 'file') {
+        UI.panelFile.classList.remove('hidden');
+        UI.panelUrl.classList.add('hidden');
+    } else {
+        UI.panelFile.classList.add('hidden');
+        UI.panelUrl.classList.remove('hidden');
+        // Focus the URL input when switching to URL tab
+        setTimeout(() => UI.urlInput.focus(), 100);
+    }
+    validateExecutionState();
+}
+
+function resetUrlState() {
+    AppState.inputs.url = null;
+    AppState.inputs.detectedPlatform = null;
+    UI.urlInput.classList.remove('valid', 'invalid');
+    UI.urlStatus.innerHTML = '';
+    UI.urlDetected.textContent = '';
+    UI.urlDetected.className = 'url-detected mono text-xs';
+    UI.platformBadges.forEach(b => b.classList.remove('detected'));
+    validateExecutionState();
+}
+
+async function validateUrl(url) {
+    try {
+        const res = await fetch(`${API_BASE}/validate/url`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+            signal: AbortSignal.timeout(5000),
+        });
+        const data = await res.json();
+
+        if (data.valid) {
+            AppState.inputs.url = url;
+            AppState.inputs.detectedPlatform = data.platform;
+            UI.urlInput.classList.remove('invalid');
+            UI.urlInput.classList.add('valid');
+            UI.urlStatus.innerHTML = `<svg class="status-icon valid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>`;
+
+            const platformNames = { youtube: 'YouTube', tiktok: 'TikTok', instagram: 'Instagram' };
+            UI.urlDetected.textContent = `✓ Detected: ${platformNames[data.platform] || data.platform}`;
+            UI.urlDetected.className = 'url-detected mono text-xs detected';
+
+            // Highlight matching platform badge
+            UI.platformBadges.forEach(b => {
+                b.classList.toggle('detected', b.dataset.platform === data.platform);
+            });
+
+            // Fetch preview
+            fetchPreview(url);
+        } else {
+            AppState.inputs.url = null;
+            AppState.inputs.detectedPlatform = null;
+            UI.urlInput.classList.remove('valid');
+            UI.urlInput.classList.add('invalid');
+            UI.urlStatus.innerHTML = `<svg class="status-icon invalid" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>`;
+            UI.urlDetected.textContent = 'Unsupported URL — use YouTube, TikTok, or Instagram';
+            UI.urlDetected.className = 'url-detected mono text-xs error';
+            UI.platformBadges.forEach(b => b.classList.remove('detected'));
+            hidePreview();
+        }
+    } catch (e) {
+        UI.urlStatus.innerHTML = '';
+        UI.urlDetected.textContent = 'Could not validate — check API connection';
+        UI.urlDetected.className = 'url-detected mono text-xs error';
+        hidePreview();
+    }
+    validateExecutionState();
+}
+
+async function fetchPreview(url) {
+    const previewCard = document.getElementById('urlPreviewCard');
+    const previewSkeleton = document.getElementById('previewSkeleton');
+    const previewContent = document.getElementById('previewContent');
+    const previewThumb = document.getElementById('previewThumb');
+    const previewTitle = document.getElementById('previewTitle');
+    const previewUploader = document.getElementById('previewUploader');
+    const previewDuration = document.getElementById('previewDuration');
+
+    previewCard.classList.remove('hidden');
+    previewSkeleton.classList.remove('hidden');
+    previewContent.classList.add('hidden');
+
+    try {
+        const res = await fetch(`${API_BASE}/preview/url`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ url }),
+            signal: AbortSignal.timeout(10000),
+        });
+        const data = await res.json();
+
+        if (data.success) {
+            if (data.thumbnail) {
+                 previewThumb.src = data.thumbnail.startsWith('http') ? data.thumbnail : `${API_BASE}${data.thumbnail}`;
+            } else {
+                 // Fallback image or hide thumb wrap
+                 previewThumb.src = ''; 
+            }
+            previewTitle.textContent = data.title || 'Unknown Title';
+            previewUploader.textContent = data.uploader ? `by ${data.uploader}` : '';
+            
+            if (data.duration) {
+                const mins = Math.floor(data.duration / 60);
+                const secs = Math.floor(data.duration % 60).toString().padStart(2, '0');
+                previewDuration.textContent = `${mins}:${secs}`;
+            } else {
+                previewDuration.textContent = '';
+            }
+
+            // small delay to allow image to load slightly before showing
+            setTimeout(() => {
+                previewSkeleton.classList.add('hidden');
+                previewContent.classList.remove('hidden');
+            }, 300);
+        } else {
+            hidePreview();
+        }
+    } catch (e) {
+        console.error("Preview fetch failed", e);
+        hidePreview();
+    }
+}
+
+function hidePreview() {
+    const previewCard = document.getElementById('urlPreviewCard');
+    if(previewCard) previewCard.classList.add('hidden');
+}
+
 function validateExecutionState() {
-    const canRun = AppState.apiReady && AppState.inputs.file && !AppState.isExecuting;
+    let hasInput = false;
+    if (AppState.inputs.inputMode === 'file') {
+        hasInput = !!AppState.inputs.file;
+    } else {
+        hasInput = !!AppState.inputs.url;
+    }
+    const canRun = AppState.apiReady && hasInput && !AppState.isExecuting;
     UI.runBtn.disabled = !canRun;
 }
 
@@ -399,33 +614,74 @@ async function executePipeline() {
     };
 
     const isCompare = AppState.inputs.modelVersion === 'compare';
+    const isUrlMode = AppState.inputs.inputMode === 'url';
     const endpoint = AppState.inputs.mode === 'ensemble' ? '/predict/ensemble' : '/predict';
-    
-    const formData = new FormData();
-    formData.append('video', AppState.inputs.file);
 
     try {
-        if (isCompare) {
-            // Run both models
-            const formData2 = new FormData();
-            formData2.append('video', AppState.inputs.file);
-            const [res1, res2] = await Promise.all([
-                fetch(`${API_BASE}${endpoint}?model_version=default&task_id=${taskId}`, { method: 'POST', body: formData }),
-                fetch(`${API_BASE}${endpoint}?model_version=no_yt&task_id=${taskId}_b`, { method: 'POST', body: formData2 })
-            ]);
-            if (!res1.ok) { const err = await res1.json(); throw new Error(err.detail || `Server Error ${res1.status}`); }
-            if (!res2.ok) { const err = await res2.json(); throw new Error(err.detail || `Server Error ${res2.status}`); }
-            AppState.results = await res1.json();
-            AppState.compareResults = await res2.json();
-        } else {
-            const url = `${API_BASE}${endpoint}?model_version=${AppState.inputs.modelVersion}&task_id=${taskId}`;
-            const res = await fetch(url, { method: 'POST', body: formData });
-            if (!res.ok) {
-                const err = await res.json();
-                throw new Error(err.detail || `Server Error ${res.status}`);
+        if (isUrlMode) {
+            // ─── URL-based inference ───
+            const mode = AppState.inputs.mode;
+            if (isCompare) {
+                const [res1, res2] = await Promise.all([
+                    fetch(`${API_BASE}/predict/url`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: AppState.inputs.url, model_version: 'default', mode, task_id: taskId }),
+                    }),
+                    fetch(`${API_BASE}/predict/url`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ url: AppState.inputs.url, model_version: 'no_yt', mode, task_id: taskId + '_b' }),
+                    }),
+                ]);
+                if (!res1.ok) { const err = await res1.json(); throw new Error(err.detail || `Server Error ${res1.status}`); }
+                if (!res2.ok) { const err = await res2.json(); throw new Error(err.detail || `Server Error ${res2.status}`); }
+                AppState.results = await res1.json();
+                AppState.compareResults = await res2.json();
+            } else {
+                const res = await fetch(`${API_BASE}/predict/url`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        url: AppState.inputs.url,
+                        model_version: AppState.inputs.modelVersion,
+                        mode,
+                        task_id: taskId,
+                    }),
+                });
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || `Server Error ${res.status}`);
+                }
+                AppState.results = await res.json();
+                AppState.compareResults = null;
             }
-            AppState.results = await res.json();
-            AppState.compareResults = null;
+        } else {
+            // ─── File upload inference (existing) ───
+            const formData = new FormData();
+            formData.append('video', AppState.inputs.file);
+
+            if (isCompare) {
+                const formData2 = new FormData();
+                formData2.append('video', AppState.inputs.file);
+                const [res1, res2] = await Promise.all([
+                    fetch(`${API_BASE}${endpoint}?model_version=default&task_id=${taskId}`, { method: 'POST', body: formData }),
+                    fetch(`${API_BASE}${endpoint}?model_version=no_yt&task_id=${taskId}_b`, { method: 'POST', body: formData2 })
+                ]);
+                if (!res1.ok) { const err = await res1.json(); throw new Error(err.detail || `Server Error ${res1.status}`); }
+                if (!res2.ok) { const err = await res2.json(); throw new Error(err.detail || `Server Error ${res2.status}`); }
+                AppState.results = await res1.json();
+                AppState.compareResults = await res2.json();
+            } else {
+                const url = `${API_BASE}${endpoint}?model_version=${AppState.inputs.modelVersion}&task_id=${taskId}`;
+                const res = await fetch(url, { method: 'POST', body: formData });
+                if (!res.ok) {
+                    const err = await res.json();
+                    throw new Error(err.detail || `Server Error ${res.status}`);
+                }
+                AppState.results = await res.json();
+                AppState.compareResults = null;
+            }
         }
 
         AppState.telemetrySummary = computeTelemetrySummary(AppState.telemetryHistory);
